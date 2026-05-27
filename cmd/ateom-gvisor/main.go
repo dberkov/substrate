@@ -28,17 +28,13 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/hashicorp/go-reap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -64,21 +60,20 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
-	slog.SetDefault(logger)
+	serverboot.InitLogger()
 
 	slog.InfoContext(ctx, "ateom booting")
 
-	tp, err := initTracing(ctx)
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: "ateom-gvisor",
+		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		// ateom has no network connectivity once eth0 moves into the gvisor netns.
+		NoExporter: true,
+	})
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to initialize tracing", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			slog.Error("Failed to shutdown TracerProvider", slog.Any("err", err))
-		}
-	}()
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podNamespace, *podName)
@@ -128,7 +123,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := NewActorLogger(logger, metadata.OnGCE())
+	actorLogger := NewActorLogger(slog.Default(), metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, eth0LinkInfo, actorLogger)
 
 	svr := grpc.NewServer(
@@ -144,30 +139,6 @@ func do(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("ateom-gvisor"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	// No exporter, since ateom has no network connectivity once eth0 is sent
-	// into the gvisor netns.  Maybe we can eventually figure out export via
-	// UDS.
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(res),
-		// Only trace on-demand when signaled by the client (e.g. via --trace flag)
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	return tp, nil
 }
 
 // AteomService is a service for shepherding single microvm.
