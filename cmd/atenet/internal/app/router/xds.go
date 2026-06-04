@@ -264,6 +264,16 @@ func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
 				TypedConfig: clusterConfigAny,
 			},
 		},
+		UpstreamConnectionOptions: &clusterv3.UpstreamConnectionOptions{
+			TcpKeepalive: &corev3.TcpKeepalive{
+				// number of probes before giving up
+				KeepaliveProbes:   &wrapperspb.UInt32Value{Value: 3},
+				// idle seconds before first probe
+				KeepaliveTime:     &wrapperspb.UInt32Value{Value: 10},
+				// seconds between probes
+				KeepaliveInterval: &wrapperspb.UInt32Value{Value: 5},
+			},
+		},		
 	}
 }
 
@@ -286,7 +296,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: "dynamic_forward_proxy_cluster",
 								},
-								Timeout: durationpb.New(10 * time.Second),
+								Timeout: durationpb.New(10 * time.Minute),
 							},
 						},
 					},
@@ -334,6 +344,7 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 	hcm, _ := anypb.New(&hcmv3.HttpConnectionManager{
 		StatPrefix:        statPrefix,
 		GenerateRequestId: &wrapperspb.BoolValue{Value: true},
+		StreamIdleTimeout: durationpb.New(30 * time.Second),  // NEW
 		AccessLog: []*accesslogv3.AccessLog{
 			{
 				Name: "envoy.access_loggers.stdout",
