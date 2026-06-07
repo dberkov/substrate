@@ -162,6 +162,7 @@ message Worker {
   string ip              = 7;
   int64  version         = 8;
   string worker_pod_uid  = 9;
+  string node_name       = 10;
 }
 
 message DebugClearRequest {}
