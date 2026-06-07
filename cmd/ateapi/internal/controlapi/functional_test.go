@@ -868,6 +868,7 @@ func TestResumeActor(t *testing.T) {
 		ActorTemplate:   "tmpl1",
 		ActorId:         id,
 		Ip:              "127.0.0.1",
+		NodeName:        "node1",
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {

@@ -390,8 +390,27 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
-	prefix := strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")
 	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+
+	switch req.GetType(){
+	case ateletpb.CheckpointRequest_CHECKPOINT_TYPE_EXTERNAL:
+		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
+	}
+
+	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
+		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
+	}
+
+	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string) error {
+	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
+	prefix := strings.TrimSuffix(req.GetExternalConfig().GetSnapshotUriPrefix(), "/")
 
 	checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
 	pagesImgPath := filepath.Join(checkpointDir, "pages.img")
@@ -404,7 +423,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		prefix+"/checkpoint.img.zstd",
 		checkpointImgPath,
 	); err != nil {
-		return nil, fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
+		return fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
 	}
 
 	recordSnapshotSize(ctx, "pages", pagesImgPath, ns, tmpl)
@@ -412,21 +431,16 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		prefix+"/pages.img.zstd",
 		pagesImgPath,
 	); err != nil {
-		return nil, err
+		return err
 	}
 	recordSnapshotSize(ctx, "pages_meta", pagesMetaImgPath, ns, tmpl)
 	if err := uploadIfExists(ctx, s.gcsClient,
 		prefix+"/pages_meta.img.zstd",
 		pagesMetaImgPath,
 	); err != nil {
-		return nil, err
+		return err
 	}
-
-	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
-		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
-	}
-
-	return &ateletpb.CheckpointResponse{}, nil
+	return nil
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {

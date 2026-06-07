@@ -144,7 +144,12 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 		Spec: &ateletpb.WorkloadSpec{
 			PauseImage: state.ActorTemplate.Spec.PauseImage,
 		},
-		SnapshotUriPrefix: state.Actor.GetInProgressSnapshot(),
+		Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+		Config: &ateletpb.CheckpointRequest_ExternalConfig{
+			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+				SnapshotUriPrefix: state.Actor.GetInProgressSnapshot(),
+			},
+		},
 	}
 	for _, ctr := range state.ActorTemplate.Spec.Containers {
 		ateletCtr := &ateletpb.Container{
