@@ -104,6 +104,13 @@ func CheckpointStateDir(actorTemplateNamespace, actorTemplateName, actorID strin
 	)
 }
 
+func LocalCheckpointsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"local-checkpoint",
+	)
+}
+
 // RestoreStateDir is the local directory to use to restore an actor from a
 // checkpoint downloaded from GCS.
 //
@@ -133,5 +140,12 @@ func PIDFilePath(actorTemplateNamespace, actorTemplateName, actorID, containerNa
 	return filepath.Join(
 		PIDFileDir(actorTemplateNamespace, actorTemplateName, actorID),
 		containerName+".pid",
+	)
+}
+
+func LocalCheckpointDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"local-checkpoint",
 	)
 }
