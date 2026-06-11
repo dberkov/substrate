@@ -157,8 +157,16 @@ message RestoreRequest {
 
   WorkloadSpec spec = 7;
 
-  // The object storage URI prefix of the snapshot to restore.
-  string snapshot_uri_prefix = 8;
+  // deprecated snapshot_uri_prefix
+  reserved 8;
+
+  CheckpointType type = 9;
+
+  // The checkpoint configuration, depending on the type.
+  oneof config {
+    LocalCheckpointConfiguration local_config    = 10;
+    ExternalCheckpointConfiguration external_config = 11;
+  }
 }
 
 message RestoreResponse {

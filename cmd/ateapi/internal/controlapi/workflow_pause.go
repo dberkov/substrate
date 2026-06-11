@@ -239,7 +239,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL,
 				Data: &ateapipb.SnapshotInfo_Local{
 					Local: &ateapipb.LocalSnapshotInfo{
-						SnapshotPrefix: latestActor.InProgressSnapshot,
+						SnapshotPrefix:            latestActor.InProgressSnapshot,
 						NodeVmsWithLocalSnapshots: []string{nodeName},
 					},
 				},

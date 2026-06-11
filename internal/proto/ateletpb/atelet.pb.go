@@ -868,10 +868,16 @@ type RestoreRequest struct {
 	ActorId                string                 `protobuf:"bytes,5,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
 	Runsc                  *RunscConfig           `protobuf:"bytes,6,opt,name=runsc,proto3" json:"runsc,omitempty"`
 	Spec                   *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// The object storage URI prefix of the snapshot to restore.
-	SnapshotUriPrefix string `protobuf:"bytes,8,opt,name=snapshot_uri_prefix,json=snapshotUriPrefix,proto3" json:"snapshot_uri_prefix,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Type                   CheckpointType         `protobuf:"varint,9,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
+	// The checkpoint configuration, depending on the type.
+	//
+	// Types that are valid to be assigned to Config:
+	//
+	//	*RestoreRequest_LocalConfig
+	//	*RestoreRequest_ExternalConfig
+	Config        isRestoreRequest_Config `protobuf_oneof:"config"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
@@ -946,12 +952,53 @@ func (x *RestoreRequest) GetSpec() *WorkloadSpec {
 	return nil
 }
 
-func (x *RestoreRequest) GetSnapshotUriPrefix() string {
+func (x *RestoreRequest) GetType() CheckpointType {
 	if x != nil {
-		return x.SnapshotUriPrefix
+		return x.Type
 	}
-	return ""
+	return CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED
 }
+
+func (x *RestoreRequest) GetConfig() isRestoreRequest_Config {
+	if x != nil {
+		return x.Config
+	}
+	return nil
+}
+
+func (x *RestoreRequest) GetLocalConfig() *LocalCheckpointConfiguration {
+	if x != nil {
+		if x, ok := x.Config.(*RestoreRequest_LocalConfig); ok {
+			return x.LocalConfig
+		}
+	}
+	return nil
+}
+
+func (x *RestoreRequest) GetExternalConfig() *ExternalCheckpointConfiguration {
+	if x != nil {
+		if x, ok := x.Config.(*RestoreRequest_ExternalConfig); ok {
+			return x.ExternalConfig
+		}
+	}
+	return nil
+}
+
+type isRestoreRequest_Config interface {
+	isRestoreRequest_Config()
+}
+
+type RestoreRequest_LocalConfig struct {
+	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,10,opt,name=local_config,json=localConfig,proto3,oneof"`
+}
+
+type RestoreRequest_ExternalConfig struct {
+	ExternalConfig *ExternalCheckpointConfiguration `protobuf:"bytes,11,opt,name=external_config,json=externalConfig,proto3,oneof"`
+}
+
+func (*RestoreRequest_LocalConfig) isRestoreRequest_Config() {}
+
+func (*RestoreRequest_ExternalConfig) isRestoreRequest_Config() {}
 
 type RestoreResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1045,15 +1092,19 @@ const file_atelet_proto_rawDesc = "" +
 	" \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
 	"\x0fexternal_config\x18\v \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfigB\b\n" +
 	"\x06configJ\x04\b\b\x10\t\"\x14\n" +
-	"\x12CheckpointResponse\"\xc4\x02\n" +
+	"\x12CheckpointResponse\"\xef\x03\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x128\n" +
 	"\x18actor_template_namespace\x18\x03 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x04 \x01(\tR\x11actorTemplateName\x12\x19\n" +
 	"\bactor_id\x18\x05 \x01(\tR\aactorId\x12)\n" +
 	"\x05runsc\x18\x06 \x01(\v2\x13.atelet.RunscConfigR\x05runsc\x12(\n" +
-	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12.\n" +
-	"\x13snapshot_uri_prefix\x18\b \x01(\tR\x11snapshotUriPrefix\"\x11\n" +
+	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
+	"\x04type\x18\t \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
+	"\flocal_config\x18\n" +
+	" \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
+	"\x0fexternal_config\x18\v \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfigB\b\n" +
+	"\x06configJ\x04\b\b\x10\t\"\x11\n" +
 	"\x0fRestoreResponse*j\n" +
 	"\x0eCheckpointType\x12\x1f\n" +
 	"\x1bCHECKPOINT_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
@@ -1113,17 +1164,20 @@ var file_atelet_proto_depIdxs = []int32{
 	11, // 12: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
 	5,  // 13: atelet.RestoreRequest.runsc:type_name -> atelet.RunscConfig
 	6,  // 14: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
-	1,  // 15: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	12, // 16: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	14, // 17: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	9,  // 18: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	13, // 19: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	15, // 20: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	18, // [18:21] is the sub-list for method output_type
-	15, // [15:18] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	0,  // 15: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
+	10, // 16: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
+	11, // 17: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
+	1,  // 18: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
+	12, // 19: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
+	14, // 20: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
+	9,  // 21: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
+	13, // 22: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
+	15, // 23: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
+	21, // [21:24] is the sub-list for method output_type
+	18, // [18:21] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }
@@ -1134,6 +1188,10 @@ func file_atelet_proto_init() {
 	file_atelet_proto_msgTypes[11].OneofWrappers = []any{
 		(*CheckpointRequest_LocalConfig)(nil),
 		(*CheckpointRequest_ExternalConfig)(nil),
+	}
+	file_atelet_proto_msgTypes[13].OneofWrappers = []any{
+		(*RestoreRequest_LocalConfig)(nil),
+		(*RestoreRequest_ExternalConfig)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
