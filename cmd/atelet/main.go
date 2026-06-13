@@ -530,7 +530,7 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix st
 	for _, fileName := range []string{"checkpoint.img", "pages.img", "pages_meta.img"} {
 		if ctx.Err() != nil {
 			return fmt.Errorf("context cancelled: %w", ctx.Err())
-		}	
+		}
 		src := filepath.Join(srcDir, snapshotPrefix, fileName)
 		dst := filepath.Join(dstDir, fileName)
 		if _, err := copyFile(src, dst); err != nil {
