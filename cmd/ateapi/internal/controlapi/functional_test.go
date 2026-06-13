@@ -1158,7 +1158,7 @@ func TestSuspendActor(t *testing.T) {
 // 7. Calls PauseActor RPC.
 // 8. Verifies that the fake Atelet received the Pause call.
 func TestPauseActor(t *testing.T) {
-	ns := namespaceForTest("ns-suspend")
+	ns := namespaceForTest("ns-pause")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
@@ -1184,7 +1184,7 @@ func TestPauseActor(t *testing.T) {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
 
-	// Suspend
+	// Pause
 	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
 		ActorId: id,
 	})
