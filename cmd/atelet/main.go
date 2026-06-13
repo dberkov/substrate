@@ -492,6 +492,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+		// TODO(dberkov): the old pause checkpoint files are not deleted after they are copied to checkpointDir. This needs to be fixed in following PR.
 		localCheckpointDir := ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 		if err := s.copyLocalCheckpoint(ctx, req.GetLocalConfig().GetSnapshotPrefix(), localCheckpointDir, checkpointDir); err != nil {
 			return nil, err
