@@ -142,10 +142,3 @@ func PIDFilePath(actorTemplateNamespace, actorTemplateName, actorID, containerNa
 		containerName+".pid",
 	)
 }
-
-func LocalCheckpointDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
-	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
-		"local-checkpoint",
-	)
-}

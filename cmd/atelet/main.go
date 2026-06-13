@@ -526,9 +526,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	return &ateletpb.RestoreResponse{}, nil
 }
 
-func (s *AteomHerder) copyLocalCheckpoint(_ context.Context, snapshtoPrefix string, srcDir, dstDir string) error {
+func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string) error {
 	for _, fileName := range []string{"checkpoint.img", "pages.img", "pages_meta.img"} {
-		src := filepath.Join(srcDir, snapshtoPrefix, fileName)
+		if ctx.Err() != nil {
+			return fmt.Errorf("context cancelled: %w", ctx.Err())
+		}	
+		src := filepath.Join(srcDir, snapshotPrefix, fileName)
 		dst := filepath.Join(dstDir, fileName)
 		if _, err := copyFile(src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
