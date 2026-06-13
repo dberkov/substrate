@@ -179,6 +179,29 @@ spec:
                               maximum: 65535
                               minimum: 1
                               type: integer
+                            volumeMounts:
+                              description: volumeMounts define the volumes to mount
+                                into this container.
+                              items:
+                                description: VolumeMount describes a mounting of a
+                                  Volume within a actor.
+                                properties:
+                                  mountPath:
+                                    description: |-
+                                      Path within the actor at which the volume should be mounted. Must
+                                      not contain ':'.
+                                    maxLength: 4096
+                                    type: string
+                                  name:
+                                    description: This must match the Name of a Volume.
+                                    maxLength: 63
+                                    type: string
+                                required:
+                                - mountPath
+                                - name
+                                type: object
+                              maxItems: 32
+                              type: array
                           required:
                           - port
                           type: object
@@ -230,9 +253,56 @@ spec:
                     description: Location to store snapshots in.
                     minLength: 1
                     type: string
+                  onCommit:
+                    description: |-
+                      OnCommit specifies what to include in the snapshot when a commit is requested.
+                      If not provided, the "process" behavior is used by default.
+                      The OnCommit must be a subset of the OnPause content.
+
+                      For example:
+                        - if OnPause is "process", then OnCommit can be "process" or "homedir".
+                        - if OnPause is "homedir", then OnCommit must be "homedir".
+                    enum:
+                    - process
+                    - homedir
+                    type: string
+                  onPause:
+                    description: |-
+                      OnPause specifies what to include in the snapshot when the actor is paused.
+                      If not provided, the "process" behavior is used by default.
+                    enum:
+                    - process
+                    - homedir
+                    type: string
                 required:
                 - location
                 type: object
+                x-kubernetes-validations:
+                - message: OnCommit must be a subset of OnPause
+                  rule: '(has(self.onPause) ? self.onPause : ''process'') == ''process''
+                    || (has(self.onCommit) ? self.onCommit : ''process'') == (has(self.onPause)
+                    ? self.onPause : ''process'')'
+              volumes:
+                description: Volumes defines the volumes to mount into all containers
+                  in the actor.
+                items:
+                  properties:
+                    homeDir:
+                      description: homeDir represents a directory on rootfs that will
+                        participate in snapshots.
+                      type: object
+                    name:
+                      description: name of the volume.
+                      maxLength: 63
+                      type: string
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of the fields in [homeDir] must be set
+                    rule: '[has(self.homeDir)].filter(x,x==true).size() == 1'
+                maxItems: 32
+                type: array
               workerSelector:
                 description: |-
                   WorkerSelector restricts which worker pools actors from this template may
@@ -291,6 +361,19 @@ spec:
             x-kubernetes-validations:
             - message: Spec is immutable
               rule: self == oldSelf
+            - message: A container may mount at most one HomeDir-typed volume
+              rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
+                || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v,
+                v.name == vm.name && has(v.homeDir))).size() <= 1)'
+            - message: 'MountPath for a HomeDir volume must be a clean absolute Unix
+                path: must start with ''/'', not be ''/'', and contain no '':'', ''..'',
+                ''.'', ''//'', trailing ''/'', or control characters'
+              rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
+                || c.volumeMounts.all(vm, !has(self.volumes) || !self.volumes.exists(v,
+                v.name == vm.name && has(v.homeDir)) || (vm.mountPath.startsWith(''/'')
+                && size(vm.mountPath) > 1 && !vm.mountPath.endsWith(''/'') && !vm.mountPath.contains(''//'')
+                && !vm.mountPath.contains('':'') && !vm.mountPath.matches(''[\x00-\x1f\x7f]'')
+                && !vm.mountPath.matches(''(^|/)[.][.]?(/|$)''))))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

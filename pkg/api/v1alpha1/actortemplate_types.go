@@ -29,6 +29,48 @@ const (
 	PhaseFailed            PhaseType = "Failed"
 )
 
+// Represents a directory on rootfs that will participate in snapshots.
+type HomedirVolumeSource struct {
+}
+
+// Represents the source of a volume to mount.
+// Exactly one of its members must be specified.
+//
+// When adding a new source type, list it in the ExactlyOneOf marker below.
+//
+// +kubebuilder:validation:ExactlyOneOf={homeDir}
+type VolumeSource struct {
+	// homeDir represents a directory on rootfs that will participate in snapshots.
+	// +optional
+	HomeDir *HomedirVolumeSource `json:"homeDir,omitempty" protobuf:"bytes,2,opt,name=homeDir"`
+}
+
+type Volume struct {
+	// name of the volume.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+
+	// volumeSource represents the location and type of the mounted volume.
+	VolumeSource `json:",inline" protobuf:"bytes,2,opt,name=volumeSource"`
+}
+
+// VolumeMount describes a mounting of a Volume within a actor.
+type VolumeMount struct {
+	// This must match the Name of a Volume.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+	// Path within the actor at which the volume should be mounted. Must
+	// not contain ':'.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=4096
+	MountPath string `json:"mountPath" protobuf:"bytes,3,opt,name=mountPath"`
+}
+
 // A single application container that you want to run within a WorkerPool.
 type Container struct {
 	// Name of the container.
@@ -94,6 +136,12 @@ type HTTPGetAction struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port"`
+
+	// volumeMounts define the volumes to mount into this container.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // EnvVar represents an environment variable supplied to a container in an
@@ -163,15 +211,47 @@ type SecretKeySelector struct {
 	Optional *bool `json:"optional,omitempty"`
 }
 
+// SnapshotScope defines what components to include in a snapshot.
+// +kubebuilder:validation:Enum=process;homedir
+type SnapshotScope string
+
+const (
+	// Process memory plus the full rootfs (homedir included).
+	SnapshotScopeProcess SnapshotScope = "process"
+	// Only the homedir; memory and the rest of rootfs are excluded.
+	SnapshotScopeHomedir SnapshotScope = "homedir"
+)
+
+// +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'process') == 'process' || (has(self.onCommit) ? self.onCommit : 'process') == (has(self.onPause) ? self.onPause : 'process')",message="OnCommit must be a subset of OnPause"
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	Location string `json:"location"`
+
+	// OnPause specifies what to include in the snapshot when the actor is paused.
+	// If not provided, the "process" behavior is used by default.
+	//
+	// +optional
+	OnPause SnapshotScope `json:"onPause,omitempty"`
+
+	// OnCommit specifies what to include in the snapshot when a commit is requested.
+	// If not provided, the "process" behavior is used by default.
+	// The OnCommit must be a subset of the OnPause content.
+	//
+	// For example:
+	//   - if OnPause is "process", then OnCommit can be "process" or "homedir".
+	//   - if OnPause is "homedir", then OnCommit must be "homedir".
+	//
+	// +optional
+	OnCommit SnapshotScope `json:"onCommit,omitempty"`
 }
 
 // ActorTemplateSpec defined desired spec of an actor.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.homeDir))).size() <= 1)",message="A container may mount at most one HomeDir-typed volume"
+// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.all(vm, !has(self.volumes) || !self.volumes.exists(v, v.name == vm.name && has(v.homeDir)) || (vm.mountPath.startsWith('/') && size(vm.mountPath) > 1 && !vm.mountPath.endsWith('/') && !vm.mountPath.contains('//') && !vm.mountPath.contains(':') && !vm.mountPath.matches('[\\x00-\\x1f\\x7f]') && !vm.mountPath.matches('(^|/)[.][.]?(/|$)'))))",message="MountPath for a HomeDir volume must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//
@@ -223,6 +303,12 @@ type ActorTemplateSpec struct {
 	//
 	// +optional
 	WorkerSelector *metav1.LabelSelector `json:"workerSelector,omitempty"`
+
+	// Volumes defines the volumes to mount into all containers in the actor.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	Volumes []Volume `json:"volumes,omitempty"`
 }
 
 // TODO: add validation
