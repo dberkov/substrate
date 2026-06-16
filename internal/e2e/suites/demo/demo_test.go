@@ -16,14 +16,22 @@ package demo
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/transport/spdy"
 )
 
 func TestActorLifecycle(t *testing.T) {
@@ -145,6 +153,14 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
+	resp, err := callActor(t, actorID)
+	if err != nil {
+		t.Fatalf("failed to call actor: %v", err)
+	}
+	if !strings.Contains(resp, "preserved memory count: 1") {
+		t.Fatalf("expected count 1, got response: %s", resp)
+	}
+
 	// Pausing the actor
 	t.Logf("Pausing Actor %q...", actorID)
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
@@ -162,6 +178,14 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+
+	resp, err = callActor(t, actorID)
+	if err != nil {
+		t.Fatalf("failed to call actor again: %v", err)
+	}
+	if !strings.Contains(resp, "preserved memory count: 2") {
+		t.Fatalf("expected count 2, got response: %s", resp)
+	}
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorID)
@@ -212,14 +236,22 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	// Pausing the actor
-	t.Logf("Pausing Actor %q...", actorID)
-	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
+	resp, err := callActor(t, actorID)
+	if err != nil {
+		t.Fatalf("failed to call actor: %v", err)
+	}
+	if !strings.Contains(resp, "preserved memory count: 1") {
+		t.Fatalf("expected count 1, got response: %s", resp)
+	}
+
+	// Suspending the actor
+	t.Logf("Suspending Actor %q...", actorID)
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		ActorId: actorID,
 	}); err != nil {
-		t.Fatalf("failed to pause Actor: %v", err)
+		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_PAUSED)
+	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorID)
@@ -229,6 +261,14 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+
+	resp, err = callActor(t, actorID)
+	if err != nil {
+		t.Fatalf("failed to call actor again: %v", err)
+	}
+	if !strings.Contains(resp, "preserved memory count: 2") {
+		t.Fatalf("expected count 2, got response: %s", resp)
+	}
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorID)
@@ -360,4 +400,96 @@ func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients,
 		time.Sleep(1 * time.Second)
 	}
 	t.Fatalf("timed out waiting for actor %q to reach status %v", actorID, expectedStatus)
+}
+
+func callActor(t *testing.T, actorID string) (string, error) {
+	t.Helper()
+	clients := e2e.GetClients()
+
+	svc, err := clients.K8s.CoreV1().Services("ate-system").Get(context.Background(), "atenet-router", metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get atenet-router service: %w", err)
+	}
+
+	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
+	pods, err := clients.K8s.CoreV1().Pods("ate-system").List(context.Background(), metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return "", fmt.Errorf("failed to list atenet-router pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return "", fmt.Errorf("no atenet-router pods found")
+	}
+	targetPod := pods.Items[0]
+
+	config, err := ateclient.LoadConfig(e2e.KubeConfig, e2e.KubeContext)
+	if err != nil {
+		return "", fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	reqConfig := clients.K8s.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(targetPod.Namespace).
+		Name(targetPod.Name).
+		SubResource("portforward")
+
+	transport, upgrader, err := spdy.RoundTripperFor(config)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SPDY transport: %w", err)
+	}
+
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, reqConfig.URL())
+
+	stopCh := make(chan struct{})
+	readyCh := make(chan struct{})
+	defer close(stopCh)
+
+	fw, err := portforward.New(dialer, []string{"0:8080"}, stopCh, readyCh, io.Discard, io.Discard)
+	if err != nil {
+		return "", fmt.Errorf("failed to create port forwarder: %w", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := fw.ForwardPorts(); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-readyCh:
+	case err := <-errCh:
+		return "", fmt.Errorf("port forwarding failed: %w", err)
+	case <-time.After(10 * time.Second):
+		return "", fmt.Errorf("timeout waiting for port-forward")
+	}
+
+	forwardedPorts, err := fw.GetPorts()
+	if err != nil || len(forwardedPorts) == 0 {
+		return "", fmt.Errorf("failed to get forwarded ports: %w", err)
+	}
+	localPort := forwardedPorts[0].Local
+
+	reqHttp, err := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d", localPort), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	reqHttp.Host = fmt.Sprintf("%s.actors.resources.substrate.ate.dev", actorID)
+
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	resp, err := httpClient.Do(reqHttp)
+	if err != nil {
+		return "", fmt.Errorf("failed to do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return string(body), nil
 }
