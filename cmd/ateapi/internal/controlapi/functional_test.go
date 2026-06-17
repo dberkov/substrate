@@ -45,6 +45,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -83,7 +84,7 @@ func TestMain(m *testing.M) {
 	_, err = k8sClient.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: "ate-system"},
 	}, metav1.CreateOptions{})
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Fatalf("create ate-system namespace: %v", err)
 	}
 
@@ -104,7 +105,7 @@ func TestMain(m *testing.M) {
 		},
 	}
 	createdAtelet, err := k8sClient.CoreV1().Pods("ate-system").Create(context.Background(), ateletPod, metav1.CreateOptions{})
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Fatalf("create atelet pod: %v", err)
 	}
 	if err == nil {
