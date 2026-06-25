@@ -188,14 +188,27 @@ spec:
                                 properties:
                                   mountPath:
                                     description: |-
-                                      Path within the actor at which the volume should be mounted. Must
-                                      not contain ':'.
+                                      Path within the actor at which the volume should be mounted. Must be a
+                                      clean absolute Unix path: must start with '/', not be '/', and contain
+                                      no ':', '..', '.', '//', trailing '/', or control characters.
                                     maxLength: 4096
                                     type: string
+                                    x-kubernetes-validations:
+                                    - message: 'MountPath must be a clean absolute
+                                        Unix path: must start with ''/'', not be ''/'',
+                                        and contain no '':'', ''..'', ''.'', ''//'',
+                                        trailing ''/'', or control characters'
+                                      rule: self.startsWith('/') && size(self) > 1
+                                        && !self.endsWith('/') && !self.contains('//')
+                                        && !self.contains(':') && !self.matches('[\x00-\x1f\x7f]')
+                                        && !self.matches('(^|/)[.][.]?(/|$)')
                                   name:
                                     description: This must match the Name of a Volume.
                                     maxLength: 63
                                     type: string
+                                    x-kubernetes-validations:
+                                    - message: Name must be a valid DNS label
+                                      rule: '!format.dns1123Label().validate(self).hasValue()'
                                 required:
                                 - mountPath
                                 - name
@@ -295,6 +308,9 @@ spec:
                       description: name of the volume.
                       maxLength: 63
                       type: string
+                      x-kubernetes-validations:
+                      - message: Name must be a valid DNS label
+                        rule: '!format.dns1123Label().validate(self).hasValue()'
                   required:
                   - name
                   type: object
@@ -365,15 +381,9 @@ spec:
               rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
                 || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v,
                 v.name == vm.name && has(v.homeDir))).size() <= 1)'
-            - message: 'MountPath for a HomeDir volume must be a clean absolute Unix
-                path: must start with ''/'', not be ''/'', and contain no '':'', ''..'',
-                ''.'', ''//'', trailing ''/'', or control characters'
-              rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
-                || c.volumeMounts.all(vm, !has(self.volumes) || !self.volumes.exists(v,
-                v.name == vm.name && has(v.homeDir)) || (vm.mountPath.startsWith(''/'')
-                && size(vm.mountPath) > 1 && !vm.mountPath.endsWith(''/'') && !vm.mountPath.contains(''//'')
-                && !vm.mountPath.contains('':'') && !vm.mountPath.matches(''[\x00-\x1f\x7f]'')
-                && !vm.mountPath.matches(''(^|/)[.][.]?(/|$)''))))'
+            - message: HomeDir volumes are not supported when sandboxClass is 'microvm'
+              rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
+                !has(self.volumes) || !self.volumes.exists(v, has(v.homeDir))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

@@ -625,7 +625,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with relative path is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -637,7 +637,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath as empty string is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -649,7 +649,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with leading whitespace is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -661,7 +661,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with trailing slash is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -673,7 +673,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with consecutive slashes is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -685,7 +685,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath containing ':' is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -697,7 +697,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with '..' component is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -709,7 +709,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with trailing '..' is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -721,7 +721,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with '.' component is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -733,7 +733,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath containing dotfile is valid (only bare '.' / '..' components are rejected)",
 		mutate: func(at *ActorTemplate) {
@@ -756,7 +756,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir MountPath with control character is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -768,7 +768,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
 		name: "Volumes: HomeDir mount with invalid MountPath in second container is rejected",
 		mutate: func(at *ActorTemplate) {
@@ -788,7 +788,68 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "MountPath for a HomeDir volume must be a clean absolute Unix path",
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: Volume Name with uppercase is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "Vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS label",
+	}, {
+		name: "Volumes: Volume Name with underscore is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol_1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS label",
+	}, {
+		name: "Volumes: VolumeMount Name with uppercase is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "Vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS label",
+	}, {
+		name: "Volumes: HomeDir volume with SandboxClass microvm is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "HomeDir volumes are not supported when sandboxClass is 'microvm'",
+	}, {
+		name: "Volumes: HomeDir volume with SandboxClass gvisor is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassGvisor
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: SandboxClass microvm without HomeDir volumes is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+		},
+		wantErr: false,
 	}}
 
 	for _, tt := range tests {

@@ -50,6 +50,7 @@ type Volume struct {
 	//
 	// +required
 	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
 	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
 
 	// volumeSource represents the location and type of the mounted volume.
@@ -62,12 +63,15 @@ type VolumeMount struct {
 	//
 	// +required
 	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
 	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
-	// Path within the actor at which the volume should be mounted. Must
-	// not contain ':'.
+	// Path within the actor at which the volume should be mounted. Must be a
+	// clean absolute Unix path: must start with '/', not be '/', and contain
+	// no ':', '..', '.', '//', trailing '/', or control characters.
 	//
 	// +required
 	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:XValidation:rule="self.startsWith('/') && size(self) > 1 && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="MountPath must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters"
 	MountPath string `json:"mountPath" protobuf:"bytes,3,opt,name=mountPath"`
 }
 
@@ -251,7 +255,7 @@ type SnapshotsConfig struct {
 // ActorTemplateSpec defined desired spec of an actor.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.homeDir))).size() <= 1)",message="A container may mount at most one HomeDir-typed volume"
-// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.all(vm, !has(self.volumes) || !self.volumes.exists(v, v.name == vm.name && has(v.homeDir)) || (vm.mountPath.startsWith('/') && size(vm.mountPath) > 1 && !vm.mountPath.endsWith('/') && !vm.mountPath.contains('//') && !vm.mountPath.contains(':') && !vm.mountPath.matches('[\\x00-\\x1f\\x7f]') && !vm.mountPath.matches('(^|/)[.][.]?(/|$)'))))",message="MountPath for a HomeDir volume must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters"
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.homeDir))",message="HomeDir volumes are not supported when sandboxClass is 'microvm'"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//
