@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -264,33 +263,25 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
 	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
-	var ddv []string
-	for _, ctr := range req.GetSpec().GetContainers() {
-		ddv = append(ddv, ctr.GetDurableDirVolumes()...)
-	}
-	if len(ddv) > 0 {
-		// TODO(dberkov) add control for "resume=true" flag
-		// Checkpoint each durable-dir volume
-
-		// prepare durable-dir checkpoint folder
-		fsCheckpointPath := filepath.Join(checkpointPath, ateompath.DurableDirSnapshotsSubfoldderName)
-		if err := os.MkdirAll(fsCheckpointPath, 0o700); err != nil {
-			return nil, fmt.Errorf("while creating fscheckpoint directory: %w", err)
+	switch req.GetScope() {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		var ddv []string
+		for _, ctr := range req.GetSpec().GetContainers() {
+			ddv = append(ddv, ctr.GetDurableDirVolumes()...)
 		}
-
-		// keep gVisor running if full snapshot is requested.
-		leaveRunning := req.GetScope() == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
-		if err := rcmd.cmdFsCheckpoint(ctx, "pause", fsCheckpointPath, ddv, leaveRunning); err != nil {
+		if len(ddv) == 0 {
+			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
+		}
+		if err := rcmd.cmdFsCheckpoint(ctx, "pause", checkpointPath, ddv); err != nil {
 			return nil, fmt.Errorf("while fscheckpointing durable-dir %q: %w", ddv[0], err)
 		}
-	}
-
-	// take full snapshot (memory + rootfs delta) if requested
-	if req.GetScope() == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		// Checkpoint pause container (root of the sandbox)
 		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
+	default:
+		return nil, fmt.Errorf("unsupported snapshot scope: %v", req.GetScope())
 	}
 
 	// After checkpointing the sandbox root, runsc may no longer have a usable
@@ -395,7 +386,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// Create and restore pause container
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", []string{"--fs-restore-image-path", filepath.Join(checkpointDir, ateompath.DurableDirSnapshotsSubfoldderName)}); err != nil {
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", []string{"--fs-restore-image-path", checkpointDir}); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
 		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {

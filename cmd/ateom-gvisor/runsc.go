@@ -134,7 +134,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	return nil
 }
 
-func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string, leaveRunning bool) error {
+func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
 
@@ -154,9 +154,6 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	}
 	for _, ddv := range durableDirMounts {
 		args = append(args, "-path", ddv)
-	}
-	if leaveRunning {
-		args = append(args, "-leave-running")
 	}
 
 	// name of the container must be the last paramter.

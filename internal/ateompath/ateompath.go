@@ -23,10 +23,6 @@ const (
 	// The base path.  This is both the path of the root shared folder on the
 	// host filesystem, and when it is mounted into ateom and atelet containers.
 	BasePath = "/var/lib/ateom-gvisor"
-
-	// DurableDir snapshots are temporarily stored in a subfolder relative to the process checkpoint path.
-	// This is because gVisor is missing the capability to separate durable-dir content from the rest of rootfs upon checkpointing.
-	DurableDirSnapshotsSubfoldderName = "durabledir"
 )
 
 var (
@@ -145,7 +141,7 @@ func LocalCheckpointsDir(actorTemplateNamespace, actorTemplateName, actorID stri
 func DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
-		DurableDirSnapshotsSubfoldderName,
+		"durable-dir",
 	)
 }
 
