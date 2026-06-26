@@ -378,6 +378,9 @@ spec:
             x-kubernetes-validations:
             - message: Spec is immutable
               rule: self == oldSelf
+            - message: At most one DurableDir-typed volume is supported per ActorTemplate
+              rule: '!has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size()
+                <= 1'
             - message: A container may mount at most one DurableDir-typed volume
               rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
                 || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v,

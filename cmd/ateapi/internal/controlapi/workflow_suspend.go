@@ -29,7 +29,6 @@ import (
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes"
 )
 
 // SuspendInput holds the immutable parameters requested by the client.
@@ -94,9 +93,7 @@ func (s *MarkSuspendingStep) Execute(ctx context.Context, input *SuspendInput, s
 func (s *MarkSuspendingStep) RetryBackoff() *wait.Backoff { return nil }
 
 type CallAteletSuspendStep struct {
-	dialer      *AteletDialer
-	kubeClient  kubernetes.Interface
-	secretCache *envSecretCache
+	dialer *AteletDialer
 }
 
 func (s *CallAteletSuspendStep) Name() string { return "CallAteletSuspend" }
@@ -119,7 +116,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(ctx, s.kubeClient, s.secretCache, state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplate(ctx, nil, nil, state.ActorTemplate)
 	if err != nil {
 		return err
 	}

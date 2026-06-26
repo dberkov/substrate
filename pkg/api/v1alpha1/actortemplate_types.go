@@ -259,6 +259,7 @@ type SnapshotsConfig struct {
 
 // ActorTemplateSpec defined desired spec of an actor.
 //
+// +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size() <= 1",message="At most one DurableDir-typed volume is supported per ActorTemplate"
 // +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.durableDir))).size() <= 1)",message="A container may mount at most one DurableDir-typed volume"
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.durableDir))",message="DurableDir volumes are not supported when sandboxClass is 'microvm'"
 type ActorTemplateSpec struct {

@@ -197,7 +197,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to call actor again: %v", err)
 			}
-			validateCounterResponse(t, resp, "after paise", tc.wantMemoryAfterPause, tc.wantFileAfterPause)
+			validateCounterResponse(t, resp, "after pause", tc.wantMemoryAfterPause, tc.wantFileAfterPause)
 
 			//
 			// Suspending the actor
@@ -424,7 +424,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
-	validateCounterResponse(t, resp, "after pause", 2, 2)
+	validateCounterResponse(t, resp, "after suspend", 2, 2)
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorID)

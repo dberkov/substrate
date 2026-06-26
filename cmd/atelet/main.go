@@ -369,7 +369,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 }
 
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
-	// assumption the request already been valdated and scope is in the valid values set
+	// assumption the request already been validated and scope is in the valid values set
 	switch scope {
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA

@@ -54,7 +54,7 @@ func incrementFileCounter() int {
 		}
 	}
 	counter++
-	err = os.WriteFile(fileCounterPath, []byte(strconv.Itoa(counter)), 0644)
+	err = os.WriteFile(fileCounterPath, []byte(strconv.Itoa(counter)), 0o644)
 	if err != nil {
 		return -1
 	}
