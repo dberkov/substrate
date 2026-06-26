@@ -365,6 +365,91 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Invalid value",
 	}, {
+		name: "valid Readyz with default path",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 8080},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "valid Readyz with explicit path",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/health", Port: 8080},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Readyz missing HTTPGet",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{}
+		},
+		wantErr: true,
+		errMsg:  "Required value",
+	}, {
+		name: "Readyz port zero",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 0},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be greater than or equal to 1",
+	}, {
+		name: "Readyz port too large",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 65536},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be less than or equal to 65535",
+	}, {
+		name: "Readyz Path with nested segments and percent encoding",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/v1/health/check%20me", Port: 80},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Readyz Path missing leading slash",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "readyz", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with query string",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/readyz?check=1", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with fragment",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/readyz#frag", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with whitespace",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/ready z", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
 		name: "valid SandboxClass microvm",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
