@@ -76,14 +76,16 @@ type ContainerReadyz struct {
 // HTTPGetAction describes an HTTP GET request to perform against the
 // container's interior IP. Modeled after a subset of corev1.HTTPGetAction.
 type HTTPGetAction struct {
-	// Path to access on the HTTP server. Defaults to "/readyz" when empty.
-	// If set, it must be a valid URL path starting with "/". Only characters
-	// permitted by RFC 3986 path segments are accepted; query strings ("?")
+	// Path to access on the HTTP server. Defaults to "/readyz".
+	// Must be a valid URL path starting with "/". Only characters permitted
+	// by RFC 3986 path segments are accepted; percent-escapes must be a
+	// literal "%" followed by exactly two hex digits. Query strings ("?")
 	// and fragments ("#") must be omitted.
 	//
 	// +optional
+	// +kubebuilder:default="/readyz"
 	// +kubebuilder:validation:MaxLength=1024
-	// +kubebuilder:validation:Pattern=`^/[A-Za-z0-9\-._~!$&'()*+,;=:@/%]*$`
+	// +kubebuilder:validation:Pattern=`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`
 	Path string `json:"path,omitempty"`
 
 	// Port to access on the container.

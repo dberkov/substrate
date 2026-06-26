@@ -13,13 +13,12 @@
 // limitations under the License.
 
 // Package readyz polls a container's HTTP readiness endpoint from inside an
-// ateom (currently ateom-gvisor; ateom-microvm will use the same code path
-// once its actor networking lands). The intent is to detect the moment a
-// container's HTTP server starts accepting connections with single-millisecond
-// latency: while the server is still booting the kernel returns RST in
-// microseconds, so a sub-millisecond poll loop spends almost no time blocked,
-// and once the listen socket is up the next iteration completes the GET on
-// veth-local latency.
+// ateom. The intent is to detect the moment a container's HTTP server
+// starts accepting connections with single-millisecond latency: while the
+// server is still booting the kernel returns RST in microseconds, so a
+// sub-millisecond poll loop spends almost no time blocked, and once the
+// listen socket is up the next iteration completes the GET on veth-local
+// latency.
 package readyz
 
 import (
@@ -36,13 +35,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Tuning knobs. Exported as vars so callers (or tests) can shorten the
-// overall timeout in pathological setups; the defaults are sized for actor
-// cold-start where the server may take a few seconds to bind.
+// Tuning knobs. Sized for actor cold-start where the HTTP server may take
+// a few seconds to bind; HTTPClient below is a var so tests can substitute
+// a transport that targets a test server's loopback address.
 const (
 	OverallTimeout   = 30 * time.Second
 	RequestTimeout   = 250 * time.Millisecond
-	PollInterval     = 500 * time.Microsecond
+	PollInterval     = 1 * time.Millisecond
 	DefaultPath      = "/readyz"
 	maxIdleConnsHost = 1
 )
@@ -91,18 +90,22 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 	start := time.Now()
 	deadline := start.Add(OverallTimeout)
 	attempts := 0
+	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("readyz cancelled for %q after %s (%d attempts): %w",
-				containerName, time.Since(start), attempts, err)
+			return fmt.Errorf("readyz cancelled for %q after %s (%d attempts, last error: %v): %w",
+				containerName, time.Since(start), attempts, lastErr, err)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("readyz for %q never returned 200 within %s (%d attempts)",
-				containerName, OverallTimeout, attempts)
+			return fmt.Errorf("readyz for %q never returned 200 within %s (%d attempts, last error: %v)",
+				containerName, OverallTimeout, attempts, lastErr)
 		}
 
 		attempts++
-		ok, _ := tryOnce(ctx, client, url)
+		ok, err := tryOnce(ctx, client, url)
+		if err != nil {
+			lastErr = err
+		}
 		if ok {
 			slog.InfoContext(ctx, "Readyz reached 200",
 				slog.String("container", containerName),
@@ -135,7 +138,10 @@ func tryOnce(ctx context.Context, client *http.Client, url string) (bool, error)
 	// Drain so the connection can be reused by the keep-alive pool.
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK, nil
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return true, nil
 }
 
 // URL builds the probe endpoint URL. Exported so callers and tests can

@@ -450,6 +450,24 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "should match",
 	}, {
+		name: "Readyz Path with bare percent",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/foo%", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with malformed percent-escape",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/bar%zz", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
 		name: "valid SandboxClass microvm",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
@@ -483,6 +501,41 @@ func TestActorTemplateValidation(t *testing.T) {
 				_ = k8sClient.Delete(ctx, at)
 			}
 		})
+	}
+}
+
+func TestActorTemplateReadyzPathDefault(t *testing.T) {
+	ctx := t.Context()
+
+	at := &ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "readyz-default",
+			Namespace: "default",
+		},
+		Spec: ActorTemplateSpec{
+			PauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da",
+			Containers: []Container{{
+				Name:  "main",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				Readyz: &ContainerReadyz{
+					HTTPGet: &HTTPGetAction{Port: 8080},
+				},
+			}},
+			SnapshotsConfig: SnapshotsConfig{Location: "gs://test-bucket/test-folder"},
+			WorkerSelector:  &metav1.LabelSelector{MatchLabels: map[string]string{"pool": "test-pool"}},
+		},
+	}
+	if err := k8sClient.Create(ctx, at); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer func() { _ = k8sClient.Delete(ctx, at) }()
+
+	got := &ActorTemplate{}
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(at), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if want, gotPath := "/readyz", got.Spec.Containers[0].Readyz.HTTPGet.Path; gotPath != want {
+		t.Errorf("Readyz.HTTPGet.Path = %q, want %q (CRD default)", gotPath, want)
 	}
 }
 

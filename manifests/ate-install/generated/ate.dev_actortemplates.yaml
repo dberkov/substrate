@@ -163,13 +163,15 @@ spec:
                             against the container.
                           properties:
                             path:
+                              default: /readyz
                               description: |-
-                                Path to access on the HTTP server. Defaults to "/readyz" when empty.
-                                If set, it must be a valid URL path starting with "/". Only characters
-                                permitted by RFC 3986 path segments are accepted; query strings ("?")
+                                Path to access on the HTTP server. Defaults to "/readyz".
+                                Must be a valid URL path starting with "/". Only characters permitted
+                                by RFC 3986 path segments are accepted; percent-escapes must be a
+                                literal "%" followed by exactly two hex digits. Query strings ("?")
                                 and fragments ("#") must be omitted.
                               maxLength: 1024
-                              pattern: ^/[A-Za-z0-9\-._~!$&'()*+,;=:@/%]*$
+                              pattern: ^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$
                               type: string
                             port:
                               description: Port to access on the container.
