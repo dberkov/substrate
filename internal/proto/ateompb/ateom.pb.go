@@ -40,23 +40,26 @@ type SnapshotScope int32
 const (
 	// Not valid option; should never happen.
 	SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED SnapshotScope = 0
-	// Snapshot memory and the full rootfs (including homedir content).
-	SnapshotScope_SNAPSHOT_SCOPE_PROCESS SnapshotScope = 1
-	// Snapshot only the homedir; memory and the rest of rootfs are excluded.
-	SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR SnapshotScope = 2
+	// Capture process memory plus the full filesystem delta on top of the OCI
+	// image (including any attached DurableDir volumes).
+	SnapshotScope_SNAPSHOT_SCOPE_FULL SnapshotScope = 1
+	// Capture only the contents of attached volumes that support snapshots
+	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
+	// excluded.
+	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
 )
 
 // Enum value maps for SnapshotScope.
 var (
 	SnapshotScope_name = map[int32]string{
 		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
-		1: "SNAPSHOT_SCOPE_PROCESS",
-		2: "SNAPSHOT_SCOPE_HOMEDIR",
+		1: "SNAPSHOT_SCOPE_FULL",
+		2: "SNAPSHOT_SCOPE_DATA",
 	}
 	SnapshotScope_value = map[string]int32{
 		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
-		"SNAPSHOT_SCOPE_PROCESS":     1,
-		"SNAPSHOT_SCOPE_HOMEDIR":     2,
+		"SNAPSHOT_SCOPE_FULL":        1,
+		"SNAPSHOT_SCOPE_DATA":        2,
 	}
 )
 
@@ -221,12 +224,12 @@ func (x *WorkloadSpec) GetContainers() []*Container {
 }
 
 type Container struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Name           string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Readyz         *Readyz                `protobuf:"bytes,2,opt,name=readyz,proto3" json:"readyz,omitempty"`
-	HomeDirVolumes []string               `protobuf:"bytes,3,rep,name=home_dir_volumes,json=homeDirVolumes,proto3" json:"home_dir_volumes,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Name              string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Readyz            *Readyz                `protobuf:"bytes,2,opt,name=readyz,proto3" json:"readyz,omitempty"`
+	DurableDirVolumes []string               `protobuf:"bytes,3,rep,name=durable_dir_volumes,json=durableDirVolumes,proto3" json:"durable_dir_volumes,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Container) Reset() {
@@ -273,9 +276,9 @@ func (x *Container) GetReadyz() *Readyz {
 	return nil
 }
 
-func (x *Container) GetHomeDirVolumes() []string {
+func (x *Container) GetDurableDirVolumes() []string {
 	if x != nil {
-		return x.HomeDirVolumes
+		return x.DurableDirVolumes
 	}
 	return nil
 }
@@ -734,11 +737,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\fWorkloadSpec\x120\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x10.ateom.ContainerR\n" +
-	"containers\"p\n" +
+	"containers\"v\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
-	"\x06readyz\x18\x02 \x01(\v2\r.ateom.ReadyzR\x06readyz\x12(\n" +
-	"\x10home_dir_volumes\x18\x03 \x03(\tR\x0ehomeDirVolumes\"9\n" +
+	"\x06readyz\x18\x02 \x01(\v2\r.ateom.ReadyzR\x06readyz\x12.\n" +
+	"\x13durable_dir_volumes\x18\x03 \x03(\tR\x11durableDirVolumes\"9\n" +
 	"\x06Readyz\x12/\n" +
 	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HTTPGetActionR\ahttpGet\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
@@ -773,11 +776,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x19\n" +
-	"\x17RestoreWorkloadResponse*g\n" +
+	"\x17RestoreWorkloadResponse*a\n" +
 	"\rSnapshotScope\x12\x1e\n" +
-	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16SNAPSHOT_SCOPE_PROCESS\x10\x01\x12\x1a\n" +
-	"\x16SNAPSHOT_SCOPE_HOMEDIR\x10\x022\x80\x02\n" +
+	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\x80\x02\n" +
 	"\x05Ateom\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
 	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +

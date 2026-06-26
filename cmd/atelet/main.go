@@ -350,11 +350,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec, req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS, hasHomedirVolumeMount(req.GetSpec())); err != nil {
+		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec, req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, hasDurableDirVolumeMount(req.GetSpec())); err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec, req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS, hasHomedirVolumeMount(req.GetSpec())); err != nil {
+		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec, req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, hasDurableDirVolumeMount(req.GetSpec())); err != nil {
 			return nil, err
 		}
 	default:
@@ -368,11 +368,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-// returns true if at least one of the containers in the workload spec has a homedir volume mount
-func hasHomedirVolumeMount(spec *ateletpb.WorkloadSpec) bool {
+// returns true if at least one of the containers in the workload spec has a durable-dir volume mount
+func hasDurableDirVolumeMount(spec *ateletpb.WorkloadSpec) bool {
 	hdv := make(map[string]bool)
 	for _, v := range spec.GetVolumes() {
-		if v.GetType() == ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR {
+		if v.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
 			hdv[v.GetName()] = true
 		}
 	}
@@ -389,14 +389,14 @@ func hasHomedirVolumeMount(spec *ateletpb.WorkloadSpec) bool {
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	// assumption the request already been valdated and scope is in the valid values set
 	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
-		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 	default:
-		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
 }
 
-func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord, moveProcessFiles bool, moveHomedirFiles bool) error {
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord, moveProcessFiles bool, moveDurableDirFiles bool) error {
 	localCheckpointPath := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()), req.GetLocalConfig().GetSnapshotPrefix())
 	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
@@ -417,16 +417,16 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		}
 	}
 
-	if moveHomedirFiles {
-		// move homedir files
-		homedirCheckpointDir := filepath.Join(checkpointDir, ateompath.HomedirSnapshotsSubfoldderName)
-		homeDirLocaclCheckpointPath := filepath.Join(localCheckpointPath, ateompath.HomedirSnapshotsSubfoldderName)
-		if err := os.MkdirAll(homeDirLocaclCheckpointPath, 0o700); err != nil {
+	if moveDurableDirFiles {
+		// move durable-dir files
+		durableDirCheckpointDir := filepath.Join(checkpointDir, ateompath.DurableDirSnapshotsSubfoldderName)
+		durableDirLocalCheckpointPath := filepath.Join(localCheckpointPath, ateompath.DurableDirSnapshotsSubfoldderName)
+		if err := os.MkdirAll(durableDirLocalCheckpointPath, 0o700); err != nil {
 			return fmt.Errorf("while creating local checkpoint directory: %w", err)
 		}
 		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
-			src := filepath.Join(homedirCheckpointDir, fileName)
-			dst := filepath.Join(homeDirLocaclCheckpointPath, fileName)
+			src := filepath.Join(durableDirCheckpointDir, fileName)
+			dst := filepath.Join(durableDirLocalCheckpointPath, fileName)
 			if err := os.Rename(src, dst); err != nil {
 				return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
 			}
@@ -446,7 +446,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	return nil
 }
 
-func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord, uploadProcessFiles bool, uploadHomedirFiles bool) error {
+func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord, uploadProcessFiles bool, uploadDurableDirFiles bool) error {
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 	prefix := strings.TrimSuffix(req.GetExternalConfig().GetSnapshotUriPrefix(), "/")
 
@@ -471,15 +471,15 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 		}
 	}
 
-	if uploadHomedirFiles {
+	if uploadDurableDirFiles {
 		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
-			impPath := filepath.Join(checkpointDir, ateompath.HomedirSnapshotsSubfoldderName, fileName)
+			impPath := filepath.Join(checkpointDir, ateompath.DurableDirSnapshotsSubfoldderName, fileName)
 
 			before, _, _ := strings.Cut(fileName, ".")
 			recordSnapshotSize(ctx, before, impPath, ns, tmpl)
 
 			if err := uploadIfExists(ctx, s.gcsClient,
-				fmt.Sprintf("%s/homedir/%s.zstd", prefix, fileName),
+				fmt.Sprintf("%s/%s/%s.zstd", prefix, ateompath.DurableDirSnapshotsSubfoldderName, fileName),
 				impPath,
 			); err != nil {
 				return err
@@ -634,7 +634,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string, files []string, scope ateletpb.SnapshotScope) error {
 	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS:
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		for _, fileName := range files {
 			if ctx.Err() != nil {
 				return fmt.Errorf("context cancelled: %w", ctx.Err())
@@ -645,18 +645,18 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix st
 				return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 			}
 		}
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
-		hdDstDir := filepath.Join(dstDir, ateompath.HomedirSnapshotsSubfoldderName)
-		if err := os.MkdirAll(hdDstDir, 0o700); err != nil {
-			return fmt.Errorf("while creating homedir directory: %w", err)
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		ddDstDir := filepath.Join(dstDir, ateompath.DurableDirSnapshotsSubfoldderName)
+		if err := os.MkdirAll(ddDstDir, 0o700); err != nil {
+			return fmt.Errorf("while creating durable-dir directory: %w", err)
 		}
 
 		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
 			if ctx.Err() != nil {
 				return fmt.Errorf("context cancelled: %w", ctx.Err())
 			}
-			src := filepath.Join(srcDir, snapshotPrefix, ateompath.HomedirSnapshotsSubfoldderName, fileName)
-			dst := filepath.Join(hdDstDir, fileName)
+			src := filepath.Join(srcDir, snapshotPrefix, ateompath.DurableDirSnapshotsSubfoldderName, fileName)
+			dst := filepath.Join(ddDstDir, fileName)
 			if _, err := copyFile(src, dst); err != nil {
 				return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 			}
@@ -695,7 +695,7 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUr
 	g, gCtx := errgroup.WithContext(ctx)
 
 	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS:
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		g, gCtx := errgroup.WithContext(ctx)
 		for _, fileName := range files {
 			fileName := fileName
@@ -710,11 +710,11 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUr
 		if err := g.Wait(); err != nil {
 			return err
 		}
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
-			remote := fmt.Sprintf("%s/%s/%s.zstd", prefix, ateompath.HomedirSnapshotsSubfoldderName, fileName)
+			remote := fmt.Sprintf("%s/%s/%s.zstd", prefix, ateompath.DurableDirSnapshotsSubfoldderName, fileName)
 			g.Go(func() error {
-				local := filepath.Join(dstDir, ateompath.HomedirSnapshotsSubfoldderName, fileName)
+				local := filepath.Join(dstDir, ateompath.DurableDirSnapshotsSubfoldderName, fileName)
 				if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, remote, local); err != nil {
 					return fmt.Errorf("while downloading %s from GCS: %w", remote, err)
 				}
@@ -751,12 +751,12 @@ func (s *AteomHerder) prepareOCIBundles(
 		return fmt.Errorf("while writing actor identity file: %w", err)
 	}
 
-	hdVolumes := make(map[string]bool)
-	// make directories for all homedir volumes
+	ddVolumes := make(map[string]bool)
+	// make directories for all durable-dir volumes
 	for _, vol := range spec.GetVolumes() {
-		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR {
-			hdVolumes[vol.GetName()] = true
-			volPath := ateompath.HomedirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
+		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+			ddVolumes[vol.GetName()] = true
+			volPath := ateompath.DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
 			}
@@ -771,13 +771,13 @@ func (s *AteomHerder) prepareOCIBundles(
 			"io.kubernetes.cri.container-type": "sandbox",
 			"io.kubernetes.cri.container-name": "pause",
 		}
-		// add anotation for every homedir volume
-		// TODO(dberkov) needs to revist this logic once gVisor will support multiple homedir volumes.
+		// add annotation for every durable-dir volume
+		// TODO(dberkov) needs to revisit this logic once gVisor supports multiple durable-dir volumes.
 		for _, vol := range spec.GetVolumes() {
-			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR {
-				annotations["dev.gvisor.spec.mount.homedir.type"] = "bind"
-				annotations["dev.gvisor.spec.mount.homedir.share"] = "container"
-				annotations["dev.gvisor.spec.mount.homedir.source"] = ateompath.HomedirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
+			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+				annotations["dev.gvisor.spec.mount.durabledir.type"] = "bind"
+				annotations["dev.gvisor.spec.mount.durabledir.share"] = "container"
+				annotations["dev.gvisor.spec.mount.durabledir.source"] = ateompath.DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
 			}
 		}
 
@@ -806,10 +806,10 @@ func (s *AteomHerder) prepareOCIBundles(
 		for _, env := range ctr.GetEnv() {
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
-		var hdMounts []*ateletpb.VolumeMount
+		var ddMounts []*ateletpb.VolumeMount
 		for _, vm := range ctr.GetVolumeMounts() {
-			if hdVolumes[vm.GetName()] {
-				hdMounts = append(hdMounts, vm)
+			if ddVolumes[vm.GetName()] {
+				ddMounts = append(ddMounts, vm)
 			}
 		}
 		g.Go(func() error {
@@ -828,7 +828,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				},
 				netnsPath,
 				identityDir,
-				hdMounts,
+				ddMounts,
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -852,18 +852,25 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 // buildAteomWorkloadSpec projects the atelet-facing workload spec onto
 // the ateom-facing one.
 func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
+	ddVolumes := make(map[string]bool)
+	for _, vol := range spec.GetVolumes() {
+		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+			ddVolumes[vol.GetName()] = true
+		}
+	}
+
 	out := &ateompb.WorkloadSpec{}
 	for _, ctr := range spec.GetContainers() {
-		var hdMountPaths []string
+		var ddMountPaths []string
 		for _, vm := range ctr.GetVolumeMounts() {
-			if hdVolumes[vm.GetName()] {
-				hdMountPaths = append(hdMountPaths, vm.GetMountPath())
+			if ddVolumes[vm.GetName()] {
+				ddMountPaths = append(ddMountPaths, vm.GetMountPath())
 			}
 		}
 		out.Containers = append(out.Containers, &ateompb.Container{
-			Name:           ctr.GetName(),
-			HomeDirVolumes: hdMountPaths,
-			Readyz:         toAteomReadyz(ctr.GetReadyz()),
+			Name:              ctr.GetName(),
+			DurableDirVolumes: ddMountPaths,
+			Readyz:            toAteomReadyz(ctr.GetReadyz()),
 		})
 	}
 	return out
@@ -987,8 +994,8 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 
 func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
 	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
-		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return nil
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
 		return fmt.Errorf("snapshot scope must be non-zero")
@@ -1095,9 +1102,9 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 		return fmt.Errorf("while creating restore-state dir: %w", err)
 	}
 
-	restoreStateHomeDir := filepath.Join(restoreStateDir, ateompath.HomedirSnapshotsSubfoldderName)
-	if err := os.MkdirAll(restoreStateHomeDir, 0o700); err != nil {
-		return fmt.Errorf("while creating restore-state homedir dir: %w", err)
+	restoreStateDurableDir := filepath.Join(restoreStateDir, ateompath.DurableDirSnapshotsSubfoldderName)
+	if err := os.MkdirAll(restoreStateDurableDir, 0o700); err != nil {
+		return fmt.Errorf("while creating restore-state durable-dir dir: %w", err)
 	}
 
 	// World-readable (0o755): bind-mounted into the actor, whose workload
@@ -1110,12 +1117,12 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 		return fmt.Errorf("while creating actor identity dir: %w", err)
 	}
 
-	homedirVolumesMountDir := ateompath.HommedirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID)
-	if err := os.RemoveAll(homedirVolumesMountDir); err != nil {
-		return fmt.Errorf("while deleting homedir volumes mount dir: %w", err)
+	durableDirVolumesMountDir := ateompath.DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID)
+	if err := os.RemoveAll(durableDirVolumesMountDir); err != nil {
+		return fmt.Errorf("while deleting durable-dir volumes mount dir: %w", err)
 	}
-	if err := os.MkdirAll(homedirVolumesMountDir, 0o755); err != nil {
-		return fmt.Errorf("while creating homedir volumes mount dir: %w", err)
+	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
+		return fmt.Errorf("while creating durable-dir volumes mount dir: %w", err)
 	}
 
 	return nil

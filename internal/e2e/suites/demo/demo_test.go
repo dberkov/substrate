@@ -42,7 +42,7 @@ func TestActorLifecycle(t *testing.T) {
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeProcess, v1alpha1.SnapshotScopeProcess)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestActorLifecycle(t *testing.T) {
 //  4. Call to actor and validate memory and file counters.
 //  5. Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
-func TestHomedirLifecycle(t *testing.T) {
+func TestDurableDirLifecycle(t *testing.T) {
 	tests := []struct {
 		name                   string
 		onCommit               v1alpha1.SnapshotScope
@@ -94,27 +94,27 @@ func TestHomedirLifecycle(t *testing.T) {
 		wantFileAfterSuspend   int
 	}{
 		{
-			name:                   "onCommit:process, onPause:process",
-			onCommit:               v1alpha1.SnapshotScopeProcess,
-			onPause:                v1alpha1.SnapshotScopeProcess,
+			name:                   "onCommit:full, onPause:full",
+			onCommit:               v1alpha1.SnapshotScopeFull,
+			onPause:                v1alpha1.SnapshotScopeFull,
 			wantMemoryAfterPause:   2,
 			wantFileAfterPause:     2,
 			wantMemoryAfterSuspend: 3,
 			wantFileAfterSuspend:   3,
 		},
 		{
-			name:                   "onCommit:homedir, onPause:process",
-			onCommit:               v1alpha1.SnapshotScopeHomedir,
-			onPause:                v1alpha1.SnapshotScopeProcess,
+			name:                   "onCommit:data, onPause:full",
+			onCommit:               v1alpha1.SnapshotScopeData,
+			onPause:                v1alpha1.SnapshotScopeFull,
 			wantMemoryAfterPause:   2,
 			wantFileAfterPause:     2,
 			wantMemoryAfterSuspend: 1,
 			wantFileAfterSuspend:   3,
 		},
 		{
-			name:                   "onCommit:homedir, onPause:homedir",
-			onCommit:               v1alpha1.SnapshotScopeHomedir,
-			onPause:                v1alpha1.SnapshotScopeHomedir,
+			name:                   "onCommit:data, onPause:data",
+			onCommit:               v1alpha1.SnapshotScopeData,
+			onPause:                v1alpha1.SnapshotScopeData,
 			wantMemoryAfterPause:   1,
 			wantFileAfterPause:     2,
 			wantMemoryAfterSuspend: 1,
@@ -140,7 +140,7 @@ func TestHomedirLifecycle(t *testing.T) {
 			//
 			// Create an Actor.
 			//
-			actorID := "homedir-lifecycle" + "-" + nsObj.Name
+			actorID := "durabledir-lifecycle" + "-" + nsObj.Name
 
 			t.Logf("Creating Actor %q using Substrate API...", actorID)
 			createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{

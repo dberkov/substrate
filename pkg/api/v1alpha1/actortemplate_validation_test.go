@@ -481,45 +481,45 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Unsupported value",
 	}, {
-		name: "SnapshotsConfig: OnPause=process, OnCommit=process",
+		name: "SnapshotsConfig: OnPause=full, OnCommit=full",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeProcess
-			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeProcess
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeFull
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeFull
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: OnPause=process, OnCommit=homedir",
+		name: "SnapshotsConfig: OnPause=full, OnCommit=data",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeProcess
-			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeHomedir
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeFull
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: OnPause=homedir, OnCommit=homedir",
+		name: "SnapshotsConfig: OnPause=data, OnCommit=data",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeHomedir
-			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeHomedir
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: OnPause=homedir, OnCommit=process (invalid)",
+		name: "SnapshotsConfig: OnPause=data, OnCommit=full (invalid)",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeHomedir
-			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeProcess
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeFull
 		},
 		wantErr: true,
 		errMsg:  "OnCommit must be a subset of OnPause",
 	}, {
-		name: "SnapshotsConfig: OnPause=homedir, OnCommit unset (defaults to process, invalid)",
+		name: "SnapshotsConfig: OnPause=data, OnCommit unset (defaults to full, invalid)",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeHomedir
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
 		},
 		wantErr: true,
 		errMsg:  "OnCommit must be a subset of OnPause",
 	}, {
-		name: "SnapshotsConfig: OnPause unset (defaults to process), OnCommit=homedir",
+		name: "SnapshotsConfig: OnPause unset (defaults to full), OnCommit=data",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeHomedir
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 		},
 		wantErr: false,
 	}, {
@@ -537,10 +537,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Unsupported value",
 	}, {
-		name: "Volumes: 1 HomeDir mount is valid",
+		name: "Volumes: 1 DurableDir mount is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home"},
@@ -548,11 +548,11 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "Volumes: 2 HomeDir mounts in same container is invalid",
+		name: "Volumes: 2 DurableDir mounts in same container is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
-				{Name: "vol2", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home1"},
@@ -560,13 +560,13 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "A container may mount at most one HomeDir-typed volume",
+		errMsg:  "A container may mount at most one DurableDir-typed volume",
 	}, {
-		name: "Volumes: 2 HomeDir mounts in different containers is valid",
+		name: "Volumes: 2 DurableDir mounts in different containers is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
-				{Name: "vol2", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers = append(at.Spec.Containers, Container{
 				Name:  "sidecar",
@@ -588,12 +588,12 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [homeDir] must be set",
+		errMsg:  "exactly one of the fields in [durableDir] must be set",
 	}, {
-		name: "Volumes: VolumeSource with no source set is invalid (mixed with a valid HomeDir volume)",
+		name: "Volumes: VolumeSource with no source set is invalid (mixed with a valid DurableDir volume)",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 				{Name: "vol2", VolumeSource: VolumeSource{}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
@@ -602,12 +602,12 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [homeDir] must be set",
+		errMsg:  "exactly one of the fields in [durableDir] must be set",
 	}, {
-		name: "Volumes: HomeDir MountPath with nested absolute path is valid",
+		name: "Volumes: DurableDir MountPath with nested absolute path is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/user/data"},
@@ -615,10 +615,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "Volumes: HomeDir MountPath as bare root is invalid",
+		name: "Volumes: DurableDir MountPath as bare root is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/"},
@@ -627,10 +627,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with relative path is invalid",
+		name: "Volumes: DurableDir MountPath with relative path is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "home/user"},
@@ -639,10 +639,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath as empty string is invalid",
+		name: "Volumes: DurableDir MountPath as empty string is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: ""},
@@ -651,10 +651,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with leading whitespace is invalid",
+		name: "Volumes: DurableDir MountPath with leading whitespace is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: " /home"},
@@ -663,10 +663,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with trailing slash is invalid",
+		name: "Volumes: DurableDir MountPath with trailing slash is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/"},
@@ -675,10 +675,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with consecutive slashes is invalid",
+		name: "Volumes: DurableDir MountPath with consecutive slashes is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home//user"},
@@ -687,10 +687,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath containing ':' is invalid",
+		name: "Volumes: DurableDir MountPath containing ':' is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/ho:me"},
@@ -699,10 +699,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with '..' component is invalid",
+		name: "Volumes: DurableDir MountPath with '..' component is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/../etc"},
@@ -711,10 +711,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with trailing '..' is invalid",
+		name: "Volumes: DurableDir MountPath with trailing '..' is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/.."},
@@ -723,10 +723,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with '.' component is invalid",
+		name: "Volumes: DurableDir MountPath with '.' component is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/./user"},
@@ -735,10 +735,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath containing dotfile is valid (only bare '.' / '..' components are rejected)",
+		name: "Volumes: DurableDir MountPath containing dotfile is valid (only bare '.' / '..' components are rejected)",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/.config"},
@@ -746,10 +746,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "Volumes: HomeDir MountPath with NUL byte is invalid",
+		name: "Volumes: DurableDir MountPath with NUL byte is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home\x00/user"},
@@ -758,10 +758,10 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir MountPath with control character is invalid",
+		name: "Volumes: DurableDir MountPath with control character is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home\t/user"},
@@ -770,11 +770,11 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "MountPath must be a clean absolute Unix path",
 	}, {
-		name: "Volumes: HomeDir mount with invalid MountPath in second container is rejected",
+		name: "Volumes: DurableDir mount with invalid MountPath in second container is rejected",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
-				{Name: "vol2", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers = append(at.Spec.Containers, Container{
 				Name:  "sidecar",
@@ -793,7 +793,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "Volumes: Volume Name with uppercase is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "Vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "Vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 		},
 		wantErr: true,
@@ -802,7 +802,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "Volumes: Volume Name with underscore is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol_1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol_1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 		},
 		wantErr: true,
@@ -811,7 +811,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "Volumes: VolumeMount Name with uppercase is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "Vol1", MountPath: "/home/user"},
@@ -820,24 +820,24 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Name must be a valid DNS label",
 	}, {
-		name: "Volumes: HomeDir volume with SandboxClass microvm is invalid",
+		name: "Volumes: DurableDir volume with SandboxClass microvm is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/user"},
 			}
 		},
 		wantErr: true,
-		errMsg:  "HomeDir volumes are not supported when sandboxClass is 'microvm'",
+		errMsg:  "DurableDir volumes are not supported when sandboxClass is 'microvm'",
 	}, {
-		name: "Volumes: HomeDir volume with SandboxClass gvisor is valid",
+		name: "Volumes: DurableDir volume with SandboxClass gvisor is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassGvisor
 			at.Spec.Volumes = []Volume{
-				{Name: "vol1", VolumeSource: VolumeSource{HomeDir: &HomedirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/user"},
@@ -845,7 +845,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "Volumes: SandboxClass microvm without HomeDir volumes is valid",
+		name: "Volumes: SandboxClass microvm without DurableDir volumes is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 		},

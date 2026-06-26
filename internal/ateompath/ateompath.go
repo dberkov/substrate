@@ -24,9 +24,9 @@ const (
 	// host filesystem, and when it is mounted into ateom and atelet containers.
 	BasePath = "/var/lib/ateom-gvisor"
 
-	// Homedir snapshots are temporarily stored in subfolder relative to process checkpoint path.
-	// This is because gVisor missing capability to separete homedir content from rest of rootfs upon checkpointing.
-	HomedirSnapshotsSubfoldderName = "homedir"
+	// DurableDir snapshots are temporarily stored in a subfolder relative to the process checkpoint path.
+	// This is because gVisor is missing the capability to separate durable-dir content from the rest of rootfs upon checkpointing.
+	DurableDirSnapshotsSubfoldderName = "durabledir"
 )
 
 var (
@@ -140,19 +140,19 @@ func LocalCheckpointsDir(actorTemplateNamespace, actorTemplateName, actorID stri
 	)
 }
 
-// HommedirVolumeMountsDir is the directory where individual home directory volumes
-// are mounted.
-func HommedirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+// DurableDirVolumeMountsDir is the directory where individual durable-dir
+// volumes are mounted.
+func DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
-		HomedirSnapshotsSubfoldderName,
+		DurableDirSnapshotsSubfoldderName,
 	)
 }
 
-// HomedirVolumeMountPoint returns the path where a specific home directory volume is mounted on the nodeVM.
-func HomedirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, volumeName string) string {
+// DurableDirVolumeMountPoint returns the path where a specific durable-dir volume is mounted on the nodeVM.
+func DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, volumeName string) string {
 	return filepath.Join(
-		HommedirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID),
+		DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID),
 		volumeName,
 	)
 }

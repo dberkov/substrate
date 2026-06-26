@@ -135,7 +135,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
 			},
 		},
-		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
+		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 	}
 }
 
@@ -152,7 +152,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
 			},
 		},
-		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
+		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 	}
 }
 

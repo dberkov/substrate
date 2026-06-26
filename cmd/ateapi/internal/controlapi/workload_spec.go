@@ -39,13 +39,13 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 
 	// add volumes
 	for _, vol := range actorTemplate.Spec.Volumes {
-		// volume is homedir type
-		if vol.VolumeSource.HomeDir != nil {
+		// volume is durable-dir type
+		if vol.VolumeSource.DurableDir != nil {
 			ateletVol := &ateletpb.Volume{
 				Name: vol.Name,
-				Type: ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
-				Source: &ateletpb.Volume_HomeDir{
-					HomeDir: &ateletpb.HomedirVolume{},
+				Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+				Source: &ateletpb.Volume_DurableDir{
+					DurableDir: &ateletpb.DurableDirVolume{},
 				},
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, ateletVol)

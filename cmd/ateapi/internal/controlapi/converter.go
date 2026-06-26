@@ -22,11 +22,11 @@ import (
 // convert atev1alpha1.SnapshotScope to ateletpb.SnapshotScope
 func toAteletSnapshotScope(in atev1alpha1.SnapshotScope) ateletpb.SnapshotScope {
 	switch in {
-	case atev1alpha1.SnapshotScopeProcess:
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS
-	case atev1alpha1.SnapshotScopeHomedir:
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR
+	case atev1alpha1.SnapshotScopeFull:
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
+	case atev1alpha1.SnapshotScopeData:
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 	default:
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
 }

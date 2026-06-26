@@ -126,11 +126,11 @@ func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
 	}
 }
 
-// Each homedir volume mount becomes a bind mount whose source is the
-// per-actor on-host HomeDirMountPoint for that volume name.
-func TestBuildActorOCISpec_HomedirVolumeMounts(t *testing.T) {
+// Each durable-dir volume mount becomes a bind mount whose source is the
+// per-actor on-host DurableDirVolumeMountPoint for that volume name.
+func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 	const ns, tmpl, id = "ns", "tmpl", "id"
-	homedirs := []*ateletpb.VolumeMount{
+	durableDirs := []*ateletpb.VolumeMount{
 		{Name: "data", MountPath: "/var/data"},
 		{Name: "cache", MountPath: "/var/cache"},
 	}
@@ -139,11 +139,11 @@ func TestBuildActorOCISpec_HomedirVolumeMounts(t *testing.T) {
 		[]string{"/app"}, nil, nil,
 		"/run/netns/x",
 		"",
-		homedirs,
+		durableDirs,
 	)
 
-	for _, vm := range homedirs {
-		wantSrc := ateompath.HomedirVolumeMountPoint(ns, tmpl, id, vm.Name)
+	for _, vm := range durableDirs {
+		wantSrc := ateompath.DurableDirVolumeMountPoint(ns, tmpl, id, vm.Name)
 		found := false
 		for _, m := range spec.Mounts {
 			if m.Destination != vm.MountPath {
@@ -151,14 +151,14 @@ func TestBuildActorOCISpec_HomedirVolumeMounts(t *testing.T) {
 			}
 			found = true
 			if m.Source != wantSrc {
-				t.Errorf("homedir %q source = %q, want %q", vm.Name, m.Source, wantSrc)
+				t.Errorf("durable-dir %q source = %q, want %q", vm.Name, m.Source, wantSrc)
 			}
 			if m.Type != "bind" {
-				t.Errorf("homedir %q type = %q, want bind", vm.Name, m.Type)
+				t.Errorf("durable-dir %q type = %q, want bind", vm.Name, m.Type)
 			}
 		}
 		if !found {
-			t.Fatalf("homedir mount for %q missing; mounts=%v", vm.MountPath, spec.Mounts)
+			t.Fatalf("durable-dir mount for %q missing; mounts=%v", vm.MountPath, spec.Mounts)
 		}
 	}
 }

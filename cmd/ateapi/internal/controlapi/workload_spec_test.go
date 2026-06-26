@@ -217,13 +217,13 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 			wantErrCode: codes.FailedPrecondition,
 		},
 		{
-			name: "converts HomeDir volume and mounts",
+			name: "converts DurableDir volume and mounts",
 			template: &atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
 				Spec: atev1alpha1.ActorTemplateSpec{
 					PauseImage: "pause",
 					Volumes: []atev1alpha1.Volume{
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{HomeDir: &atev1alpha1.HomedirVolumeSource{}}},
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
 					},
 					Containers: []atev1alpha1.Container{
 						{
@@ -242,8 +242,8 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
-						Source: &ateletpb.Volume_HomeDir{HomeDir: &ateletpb.HomedirVolume{}},
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -259,13 +259,13 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 			},
 		},
 		{
-			name: "skips non-HomeDir volumes",
+			name: "skips non-DurableDir volumes",
 			template: &atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
 				Spec: atev1alpha1.ActorTemplateSpec{
 					Volumes: []atev1alpha1.Volume{
 						{Name: "unsupported", VolumeSource: atev1alpha1.VolumeSource{}},
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{HomeDir: &atev1alpha1.HomedirVolumeSource{}}},
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
 					},
 					Containers: []atev1alpha1.Container{
 						{
@@ -282,8 +282,8 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
-						Source: &ateletpb.Volume_HomeDir{HomeDir: &ateletpb.HomedirVolume{}},
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
 				Containers: []*ateletpb.Container{
@@ -303,7 +303,7 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
 				Spec: atev1alpha1.ActorTemplateSpec{
 					Volumes: []atev1alpha1.Volume{
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{HomeDir: &atev1alpha1.HomedirVolumeSource{}}},
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
 					},
 					Containers: []atev1alpha1.Container{
 						{Name: "main", Image: "main"},
@@ -314,8 +314,8 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
-						Source: &ateletpb.Volume_HomeDir{HomeDir: &ateletpb.HomedirVolume{}},
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
 				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},

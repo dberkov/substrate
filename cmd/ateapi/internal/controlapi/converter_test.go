@@ -28,24 +28,24 @@ func TestToAteletSnapshotScope(t *testing.T) {
 		expected ateletpb.SnapshotScope
 	}{
 		{
-			name:     "Process scope",
-			in:       atev1alpha1.SnapshotScopeProcess,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
+			name:     "Full scope",
+			in:       atev1alpha1.SnapshotScopeFull,
+			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 		{
-			name:     "HomeDir scope",
-			in:       atev1alpha1.SnapshotScopeHomedir,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR,
+			name:     "Data scope",
+			in:       atev1alpha1.SnapshotScopeData,
+			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 		},
 		{
 			name:     "Default scope (empty)",
 			in:       "",
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
+			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 		{
 			name:     "Default scope (unknown)",
 			in:       "unknown",
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
+			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 	}
 

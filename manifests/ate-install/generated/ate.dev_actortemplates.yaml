@@ -269,40 +269,41 @@ spec:
                   onCommit:
                     description: |-
                       OnCommit specifies what to include in the snapshot when a commit is requested.
-                      If not provided, the "process" behavior is used by default.
+                      If not provided, the "full" behavior is used by default.
                       The OnCommit must be a subset of the OnPause content.
 
                       For example:
-                        - if OnPause is "process", then OnCommit can be "process" or "homedir".
-                        - if OnPause is "homedir", then OnCommit must be "homedir".
+                        - if OnPause is "full", then OnCommit can be "full" or "data".
+                        - if OnPause is "data", then OnCommit must be "data".
                     enum:
-                    - process
-                    - homedir
+                    - full
+                    - data
                     type: string
                   onPause:
                     description: |-
                       OnPause specifies what to include in the snapshot when the actor is paused.
-                      If not provided, the "process" behavior is used by default.
+                      If not provided, the "full" behavior is used by default.
                     enum:
-                    - process
-                    - homedir
+                    - full
+                    - data
                     type: string
                 required:
                 - location
                 type: object
                 x-kubernetes-validations:
                 - message: OnCommit must be a subset of OnPause
-                  rule: '(has(self.onPause) ? self.onPause : ''process'') == ''process''
-                    || (has(self.onCommit) ? self.onCommit : ''process'') == (has(self.onPause)
-                    ? self.onPause : ''process'')'
+                  rule: '(has(self.onPause) ? self.onPause : ''full'') == ''full''
+                    || (has(self.onCommit) ? self.onCommit : ''full'') == (has(self.onPause)
+                    ? self.onPause : ''full'')'
               volumes:
                 description: Volumes defines the volumes to mount into all containers
                   in the actor.
                 items:
                   properties:
-                    homeDir:
-                      description: homeDir represents a directory on rootfs that will
-                        participate in snapshots.
+                    durableDir:
+                      description: |-
+                        durableDir represents a durable directory on rootfs that persists across
+                        resumes and participates in snapshots.
                       type: object
                     name:
                       description: name of the volume.
@@ -315,8 +316,8 @@ spec:
                   - name
                   type: object
                   x-kubernetes-validations:
-                  - message: exactly one of the fields in [homeDir] must be set
-                    rule: '[has(self.homeDir)].filter(x,x==true).size() == 1'
+                  - message: exactly one of the fields in [durableDir] must be set
+                    rule: '[has(self.durableDir)].filter(x,x==true).size() == 1'
                 maxItems: 32
                 type: array
               workerSelector:
@@ -377,13 +378,13 @@ spec:
             x-kubernetes-validations:
             - message: Spec is immutable
               rule: self == oldSelf
-            - message: A container may mount at most one HomeDir-typed volume
+            - message: A container may mount at most one DurableDir-typed volume
               rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
                 || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v,
-                v.name == vm.name && has(v.homeDir))).size() <= 1)'
-            - message: HomeDir volumes are not supported when sandboxClass is 'microvm'
+                v.name == vm.name && has(v.durableDir))).size() <= 1)'
+            - message: DurableDir volumes are not supported when sandboxClass is 'microvm'
               rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
-                !has(self.volumes) || !self.volumes.exists(v, has(v.homeDir))'
+                !has(self.volumes) || !self.volumes.exists(v, has(v.durableDir))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

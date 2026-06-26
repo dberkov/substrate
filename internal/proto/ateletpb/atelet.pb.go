@@ -39,18 +39,18 @@ type VolumeType int32
 
 const (
 	VolumeType_VOLUME_TYPE_UNSPECIFIED VolumeType = 0
-	VolumeType_VOLUME_TYPE_HOMEDIR     VolumeType = 1
+	VolumeType_VOLUME_TYPE_DURABLE_DIR VolumeType = 1
 )
 
 // Enum value maps for VolumeType.
 var (
 	VolumeType_name = map[int32]string{
 		0: "VOLUME_TYPE_UNSPECIFIED",
-		1: "VOLUME_TYPE_HOMEDIR",
+		1: "VOLUME_TYPE_DURABLE_DIR",
 	}
 	VolumeType_value = map[string]int32{
 		"VOLUME_TYPE_UNSPECIFIED": 0,
-		"VOLUME_TYPE_HOMEDIR":     1,
+		"VOLUME_TYPE_DURABLE_DIR": 1,
 	}
 )
 
@@ -138,23 +138,26 @@ type SnapshotScope int32
 const (
 	// Not valid option; should never happen.
 	SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED SnapshotScope = 0
-	// Snapshot memory and the full rootfs (including homedir content).
-	SnapshotScope_SNAPSHOT_SCOPE_PROCESS SnapshotScope = 1
-	// Snapshot only the homedir; memory and the rest of rootfs are excluded.
-	SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR SnapshotScope = 2
+	// Capture process memory plus the full filesystem delta on top of the OCI
+	// image (including any attached DurableDir volumes).
+	SnapshotScope_SNAPSHOT_SCOPE_FULL SnapshotScope = 1
+	// Capture only the contents of attached volumes that support snapshots
+	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
+	// excluded.
+	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
 )
 
 // Enum value maps for SnapshotScope.
 var (
 	SnapshotScope_name = map[int32]string{
 		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
-		1: "SNAPSHOT_SCOPE_PROCESS",
-		2: "SNAPSHOT_SCOPE_HOMEDIR",
+		1: "SNAPSHOT_SCOPE_FULL",
+		2: "SNAPSHOT_SCOPE_DATA",
 	}
 	SnapshotScope_value = map[string]int32{
 		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
-		"SNAPSHOT_SCOPE_PROCESS":     1,
-		"SNAPSHOT_SCOPE_HOMEDIR":     2,
+		"SNAPSHOT_SCOPE_FULL":        1,
+		"SNAPSHOT_SCOPE_DATA":        2,
 	}
 )
 
@@ -491,26 +494,26 @@ func (x *WorkloadSpec) GetVolumes() []*Volume {
 	return nil
 }
 
-type HomedirVolume struct {
+type DurableDirVolume struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HomedirVolume) Reset() {
-	*x = HomedirVolume{}
+func (x *DurableDirVolume) Reset() {
+	*x = DurableDirVolume{}
 	mi := &file_atelet_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HomedirVolume) String() string {
+func (x *DurableDirVolume) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HomedirVolume) ProtoMessage() {}
+func (*DurableDirVolume) ProtoMessage() {}
 
-func (x *HomedirVolume) ProtoReflect() protoreflect.Message {
+func (x *DurableDirVolume) ProtoReflect() protoreflect.Message {
 	mi := &file_atelet_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -522,8 +525,8 @@ func (x *HomedirVolume) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HomedirVolume.ProtoReflect.Descriptor instead.
-func (*HomedirVolume) Descriptor() ([]byte, []int) {
+// Deprecated: Use DurableDirVolume.ProtoReflect.Descriptor instead.
+func (*DurableDirVolume) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{5}
 }
 
@@ -533,7 +536,7 @@ type Volume struct {
 	Type  VolumeType             `protobuf:"varint,2,opt,name=type,proto3,enum=atelet.VolumeType" json:"type,omitempty"`
 	// Types that are valid to be assigned to Source:
 	//
-	//	*Volume_HomeDir
+	//	*Volume_DurableDir
 	Source        isVolume_Source `protobuf_oneof:"source"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -590,10 +593,10 @@ func (x *Volume) GetSource() isVolume_Source {
 	return nil
 }
 
-func (x *Volume) GetHomeDir() *HomedirVolume {
+func (x *Volume) GetDurableDir() *DurableDirVolume {
 	if x != nil {
-		if x, ok := x.Source.(*Volume_HomeDir); ok {
-			return x.HomeDir
+		if x, ok := x.Source.(*Volume_DurableDir); ok {
+			return x.DurableDir
 		}
 	}
 	return nil
@@ -603,11 +606,11 @@ type isVolume_Source interface {
 	isVolume_Source()
 }
 
-type Volume_HomeDir struct {
-	HomeDir *HomedirVolume `protobuf:"bytes,3,opt,name=home_dir,json=homeDir,proto3,oneof"`
+type Volume_DurableDir struct {
+	DurableDir *DurableDirVolume `protobuf:"bytes,3,opt,name=durable_dir,json=durableDir,proto3,oneof"`
 }
 
-func (*Volume_HomeDir) isVolume_Source() {}
+func (*Volume_DurableDir) isVolume_Source() {}
 
 type VolumeMount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1423,12 +1426,13 @@ const file_atelet_proto_rawDesc = "" +
 	"containers\x12\x1f\n" +
 	"\vpause_image\x18\x02 \x01(\tR\n" +
 	"pauseImage\x12(\n" +
-	"\avolumes\x18\x03 \x03(\v2\x0e.atelet.VolumeR\avolumes\"\x0f\n" +
-	"\rHomedirVolume\"\x82\x01\n" +
+	"\avolumes\x18\x03 \x03(\v2\x0e.atelet.VolumeR\avolumes\"\x12\n" +
+	"\x10DurableDirVolume\"\x8b\x01\n" +
 	"\x06Volume\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
-	"\x04type\x18\x02 \x01(\x0e2\x12.atelet.VolumeTypeR\x04type\x122\n" +
-	"\bhome_dir\x18\x03 \x01(\v2\x15.atelet.HomedirVolumeH\x00R\ahomeDirB\b\n" +
+	"\x04type\x18\x02 \x01(\x0e2\x12.atelet.VolumeTypeR\x04type\x12;\n" +
+	"\vdurable_dir\x18\x03 \x01(\v2\x18.atelet.DurableDirVolumeH\x00R\n" +
+	"durableDirB\b\n" +
 	"\x06source\"@\n" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
@@ -1479,19 +1483,19 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0fexternal_config\x18\v \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\f \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06configJ\x04\b\x06\x10\aJ\x04\b\b\x10\t\"\x11\n" +
-	"\x0fRestoreResponse*B\n" +
+	"\x0fRestoreResponse*F\n" +
 	"\n" +
 	"VolumeType\x12\x1b\n" +
-	"\x17VOLUME_TYPE_UNSPECIFIED\x10\x00\x12\x17\n" +
-	"\x13VOLUME_TYPE_HOMEDIR\x10\x01*j\n" +
+	"\x17VOLUME_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17VOLUME_TYPE_DURABLE_DIR\x10\x01*j\n" +
 	"\x0eCheckpointType\x12\x1f\n" +
 	"\x1bCHECKPOINT_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CHECKPOINT_TYPE_LOCAL\x10\x01\x12\x1c\n" +
-	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*g\n" +
+	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*a\n" +
 	"\rSnapshotScope\x12\x1e\n" +
-	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16SNAPSHOT_SCOPE_PROCESS\x10\x01\x12\x1a\n" +
-	"\x16SNAPSHOT_SCOPE_HOMEDIR\x10\x022\xc4\x01\n" +
+	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\xc4\x01\n" +
 	"\vAteomHerder\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +
@@ -1521,7 +1525,7 @@ var file_atelet_proto_goTypes = []any{
 	(*ArchAssets)(nil),                      // 5: atelet.ArchAssets
 	(*SandboxAssets)(nil),                   // 6: atelet.SandboxAssets
 	(*WorkloadSpec)(nil),                    // 7: atelet.WorkloadSpec
-	(*HomedirVolume)(nil),                   // 8: atelet.HomedirVolume
+	(*DurableDirVolume)(nil),                // 8: atelet.DurableDirVolume
 	(*Volume)(nil),                          // 9: atelet.Volume
 	(*VolumeMount)(nil),                     // 10: atelet.VolumeMount
 	(*Container)(nil),                       // 11: atelet.Container
@@ -1546,7 +1550,7 @@ var file_atelet_proto_depIdxs = []int32{
 	11, // 4: atelet.WorkloadSpec.containers:type_name -> atelet.Container
 	9,  // 5: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
 	0,  // 6: atelet.Volume.type:type_name -> atelet.VolumeType
-	8,  // 7: atelet.Volume.home_dir:type_name -> atelet.HomedirVolume
+	8,  // 7: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolume
 	12, // 8: atelet.Container.env:type_name -> atelet.EnvEntry
 	13, // 9: atelet.Container.readyz:type_name -> atelet.Readyz
 	10, // 10: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
@@ -1582,7 +1586,7 @@ func file_atelet_proto_init() {
 		return
 	}
 	file_atelet_proto_msgTypes[6].OneofWrappers = []any{
-		(*Volume_HomeDir)(nil),
+		(*Volume_DurableDir)(nil),
 	}
 	file_atelet_proto_msgTypes[15].OneofWrappers = []any{
 		(*CheckpointRequest_LocalConfig)(nil),

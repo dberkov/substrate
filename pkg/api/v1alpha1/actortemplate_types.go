@@ -29,8 +29,9 @@ const (
 	PhaseFailed            PhaseType = "Failed"
 )
 
-// Represents a directory on rootfs that will participate in snapshots.
-type HomedirVolumeSource struct {
+// Represents a durable directory on rootfs that persists across resumes and
+// participates in snapshots.
+type DurableDirVolumeSource struct {
 }
 
 // Represents the source of a volume to mount.
@@ -38,11 +39,12 @@ type HomedirVolumeSource struct {
 //
 // When adding a new source type, list it in the ExactlyOneOf marker below.
 //
-// +kubebuilder:validation:ExactlyOneOf={homeDir}
+// +kubebuilder:validation:ExactlyOneOf={durableDir}
 type VolumeSource struct {
-	// homeDir represents a directory on rootfs that will participate in snapshots.
+	// durableDir represents a durable directory on rootfs that persists across
+	// resumes and participates in snapshots.
 	// +optional
-	HomeDir *HomedirVolumeSource `json:"homeDir,omitempty" protobuf:"bytes,2,opt,name=homeDir"`
+	DurableDir *DurableDirVolumeSource `json:"durableDir,omitempty" protobuf:"bytes,2,opt,name=durableDir"`
 }
 
 type Volume struct {
@@ -216,17 +218,20 @@ type SecretKeySelector struct {
 }
 
 // SnapshotScope defines what components to include in a snapshot.
-// +kubebuilder:validation:Enum=process;homedir
+// +kubebuilder:validation:Enum=full;data
 type SnapshotScope string
 
 const (
-	// Process memory plus the full rootfs (homedir included).
-	SnapshotScopeProcess SnapshotScope = "process"
-	// Only the homedir; memory and the rest of rootfs are excluded.
-	SnapshotScopeHomedir SnapshotScope = "homedir"
+	// Full captures process memory plus the entire filesystem delta on top of
+	// the OCI image (including any attached DurableDir volumes).
+	SnapshotScopeFull SnapshotScope = "full"
+	// Data captures only the contents of attached volumes that support
+	// snapshots (currently DurableDir-typed volumes). Process memory and
+	// the rest of rootfs are excluded.
+	SnapshotScopeData SnapshotScope = "data"
 )
 
-// +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'process') == 'process' || (has(self.onCommit) ? self.onCommit : 'process') == (has(self.onPause) ? self.onPause : 'process')",message="OnCommit must be a subset of OnPause"
+// +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'full') == 'full' || (has(self.onCommit) ? self.onCommit : 'full') == (has(self.onPause) ? self.onPause : 'full')",message="OnCommit must be a subset of OnPause"
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
 	//
@@ -235,18 +240,18 @@ type SnapshotsConfig struct {
 	Location string `json:"location"`
 
 	// OnPause specifies what to include in the snapshot when the actor is paused.
-	// If not provided, the "process" behavior is used by default.
+	// If not provided, the "full" behavior is used by default.
 	//
 	// +optional
 	OnPause SnapshotScope `json:"onPause,omitempty"`
 
 	// OnCommit specifies what to include in the snapshot when a commit is requested.
-	// If not provided, the "process" behavior is used by default.
+	// If not provided, the "full" behavior is used by default.
 	// The OnCommit must be a subset of the OnPause content.
 	//
 	// For example:
-	//   - if OnPause is "process", then OnCommit can be "process" or "homedir".
-	//   - if OnPause is "homedir", then OnCommit must be "homedir".
+	//   - if OnPause is "full", then OnCommit can be "full" or "data".
+	//   - if OnPause is "data", then OnCommit must be "data".
 	//
 	// +optional
 	OnCommit SnapshotScope `json:"onCommit,omitempty"`
@@ -254,8 +259,8 @@ type SnapshotsConfig struct {
 
 // ActorTemplateSpec defined desired spec of an actor.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.homeDir))).size() <= 1)",message="A container may mount at most one HomeDir-typed volume"
-// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.homeDir))",message="HomeDir volumes are not supported when sandboxClass is 'microvm'"
+// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.durableDir))).size() <= 1)",message="A container may mount at most one DurableDir-typed volume"
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.durableDir))",message="DurableDir volumes are not supported when sandboxClass is 'microvm'"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//
