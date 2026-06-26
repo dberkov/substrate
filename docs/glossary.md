@@ -85,11 +85,11 @@ because they change too frequently for etcd.
 
 - **Snapshot scope**: what an `ActorTemplate`'s `SnapshotsConfig` includes
   in a given snapshot. Two scopes exist today:
-  - **`full`**: process memory plus the rootfs delta on top of the OCI
+  - **`Full`**: process memory plus the rootfs delta on top of the OCI
     image (which also includes any attached `DurableDir` volumes,
     since they live inside rootfs). Used to capture everything needed
     to resume hot.
-  - **`data`**: only the contents of attached volumes that support
+  - **`Data`**: only the contents of attached volumes that support
     snapshots — currently `DurableDir` volumes. Process memory and the
     rest of rootfs are discarded; on Resume the Actor cold-boots from
     the OCI image with `DurableDir` contents restored. Used to persist

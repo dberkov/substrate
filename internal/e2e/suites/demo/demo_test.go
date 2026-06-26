@@ -94,7 +94,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 		wantFileAfterSuspend   int
 	}{
 		{
-			name:                   "onCommit:full, onPause:full",
+			name:                   "onCommit:Full, onPause:Full",
 			onCommit:               v1alpha1.SnapshotScopeFull,
 			onPause:                v1alpha1.SnapshotScopeFull,
 			wantMemoryAfterPause:   2,
@@ -103,7 +103,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 			wantFileAfterSuspend:   3,
 		},
 		{
-			name:                   "onCommit:data, onPause:full",
+			name:                   "onCommit:Data, onPause:Full",
 			onCommit:               v1alpha1.SnapshotScopeData,
 			onPause:                v1alpha1.SnapshotScopeFull,
 			wantMemoryAfterPause:   2,
@@ -112,7 +112,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 			wantFileAfterSuspend:   3,
 		},
 		{
-			name:                   "onCommit:data, onPause:data",
+			name:                   "onCommit:Data, onPause:Data",
 			onCommit:               v1alpha1.SnapshotScopeData,
 			onPause:                v1alpha1.SnapshotScopeData,
 			wantMemoryAfterPause:   1,

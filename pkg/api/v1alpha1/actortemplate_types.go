@@ -218,20 +218,20 @@ type SecretKeySelector struct {
 }
 
 // SnapshotScope defines what components to include in a snapshot.
-// +kubebuilder:validation:Enum=full;data
+// +kubebuilder:validation:Enum=Full;Data
 type SnapshotScope string
 
 const (
 	// Full captures process memory plus the entire filesystem delta on top of
 	// the OCI image (including any attached DurableDir volumes).
-	SnapshotScopeFull SnapshotScope = "full"
+	SnapshotScopeFull SnapshotScope = "Full"
 	// Data captures only the contents of attached volumes that support
 	// snapshots (currently DurableDir-typed volumes). Process memory and
 	// the rest of rootfs are excluded.
-	SnapshotScopeData SnapshotScope = "data"
+	SnapshotScopeData SnapshotScope = "Data"
 )
 
-// +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'full') == 'full' || (has(self.onCommit) ? self.onCommit : 'full') == (has(self.onPause) ? self.onPause : 'full')",message="OnCommit must be a subset of OnPause"
+// +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'Full') == 'Full' || (has(self.onCommit) ? self.onCommit : 'Full') == (has(self.onPause) ? self.onPause : 'Full')",message="onCommit must be a subset of onPause"
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
 	//
@@ -240,18 +240,18 @@ type SnapshotsConfig struct {
 	Location string `json:"location"`
 
 	// OnPause specifies what to include in the snapshot when the actor is paused.
-	// If not provided, the "full" behavior is used by default.
+	// If not provided, the "Full" behavior is used by default.
 	//
 	// +optional
 	OnPause SnapshotScope `json:"onPause,omitempty"`
 
 	// OnCommit specifies what to include in the snapshot when a commit is requested.
-	// If not provided, the "full" behavior is used by default.
-	// The OnCommit must be a subset of the OnPause content.
+	// If not provided, the "Full" behavior is used by default.
+	// onCommit must be a subset of the onPause content.
 	//
 	// For example:
-	//   - if OnPause is "full", then OnCommit can be "full" or "data".
-	//   - if OnPause is "data", then OnCommit must be "data".
+	//   - if onPause is "Full", then onCommit can be "Full" or "Data".
+	//   - if onPause is "Data", then onCommit must be "Data".
 	//
 	// +optional
 	OnCommit SnapshotScope `json:"onCommit,omitempty"`

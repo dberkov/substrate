@@ -269,32 +269,32 @@ spec:
                   onCommit:
                     description: |-
                       OnCommit specifies what to include in the snapshot when a commit is requested.
-                      If not provided, the "full" behavior is used by default.
-                      The OnCommit must be a subset of the OnPause content.
+                      If not provided, the "Full" behavior is used by default.
+                      onCommit must be a subset of the onPause content.
 
                       For example:
-                        - if OnPause is "full", then OnCommit can be "full" or "data".
-                        - if OnPause is "data", then OnCommit must be "data".
+                        - if onPause is "Full", then onCommit can be "Full" or "Data".
+                        - if onPause is "Data", then onCommit must be "Data".
                     enum:
-                    - full
-                    - data
+                    - Full
+                    - Data
                     type: string
                   onPause:
                     description: |-
                       OnPause specifies what to include in the snapshot when the actor is paused.
-                      If not provided, the "full" behavior is used by default.
+                      If not provided, the "Full" behavior is used by default.
                     enum:
-                    - full
-                    - data
+                    - Full
+                    - Data
                     type: string
                 required:
                 - location
                 type: object
                 x-kubernetes-validations:
-                - message: OnCommit must be a subset of OnPause
-                  rule: '(has(self.onPause) ? self.onPause : ''full'') == ''full''
-                    || (has(self.onCommit) ? self.onCommit : ''full'') == (has(self.onPause)
-                    ? self.onPause : ''full'')'
+                - message: onCommit must be a subset of onPause
+                  rule: '(has(self.onPause) ? self.onPause : ''Full'') == ''Full''
+                    || (has(self.onCommit) ? self.onCommit : ''Full'') == (has(self.onPause)
+                    ? self.onPause : ''Full'')'
               volumes:
                 description: Volumes defines the volumes to mount into all containers
                   in the actor.

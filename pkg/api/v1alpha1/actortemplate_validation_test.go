@@ -481,43 +481,43 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Unsupported value",
 	}, {
-		name: "SnapshotsConfig: OnPause=full, OnCommit=full",
+		name: "SnapshotsConfig: OnPause=Full, OnCommit=Full",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeFull
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeFull
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: OnPause=full, OnCommit=data",
+		name: "SnapshotsConfig: OnPause=Full, OnCommit=Data",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeFull
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: OnPause=data, OnCommit=data",
+		name: "SnapshotsConfig: OnPause=Data, OnCommit=Data",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: OnPause=data, OnCommit=full (invalid)",
+		name: "SnapshotsConfig: OnPause=Data, OnCommit=Full (invalid)",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeFull
 		},
 		wantErr: true,
-		errMsg:  "OnCommit must be a subset of OnPause",
+		errMsg:  "onCommit must be a subset of onPause",
 	}, {
-		name: "SnapshotsConfig: OnPause=data, OnCommit unset (defaults to full, invalid)",
+		name: "SnapshotsConfig: OnPause=Data, OnCommit unset (defaults to Full, invalid)",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
 		},
 		wantErr: true,
-		errMsg:  "OnCommit must be a subset of OnPause",
+		errMsg:  "onCommit must be a subset of onPause",
 	}, {
-		name: "SnapshotsConfig: OnPause unset (defaults to full), OnCommit=data",
+		name: "SnapshotsConfig: OnPause unset (defaults to Full), OnCommit=Data",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 		},
@@ -774,6 +774,39 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/.config"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath with segment starting with '..' is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/..config"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath with embedded dots inside a segment is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/x..y"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath with spaces is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/my home directory"},
 			}
 		},
 		wantErr: false,
