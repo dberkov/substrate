@@ -84,6 +84,15 @@ func TestActorLifecycle(t *testing.T) {
 //  5. Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
 func TestDurableDirLifecycle(t *testing.T) {
+	// TODO(BenTheElder) remove it once https://github.com/agent-substrate/substrate/pull/313 is merged.
+	srcName := "counter"
+	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
+		srcName = v
+	}
+	if srcName != "counter" {
+		t.Skip("Skipping TestDurableDirLifecycle because E2E_TEMPLATE_NAME is not set to \"counter\"")
+	}
+
 	tests := []struct {
 		name                   string
 		onCommit               v1alpha1.SnapshotScope
