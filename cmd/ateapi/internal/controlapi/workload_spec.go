@@ -32,7 +32,10 @@ import (
 
 const envSecretCacheTTL = 30 * time.Second
 
-func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.Interface, secretCache *envSecretCache, actorTemplate *atev1alpha1.ActorTemplate) (*ateletpb.WorkloadSpec, error) {
+// workloadSpecFromActorTemplate builds a WorkloadSpec without resolving
+// container env vars. Use this when downstream consumers (e.g. checkpoint
+// requests) don't need env entries materialized.
+func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *ateletpb.WorkloadSpec {
 	workloadSpec := &ateletpb.WorkloadSpec{
 		PauseImage: actorTemplate.Spec.PauseImage,
 	}
@@ -41,21 +44,14 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 	for _, vol := range actorTemplate.Spec.Volumes {
 		// volume is durable-dir type
 		if vol.VolumeSource.DurableDir != nil {
-			ateletVol := &ateletpb.Volume{
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
 				Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 				Source: &ateletpb.Volume_DurableDir{
 					DurableDir: &ateletpb.DurableDirVolume{},
 				},
-			}
-			workloadSpec.Volumes = append(workloadSpec.Volumes, ateletVol)
+			})
 		}
-	}
-
-	resolver := envResolver{
-		kubeClient: kubeClient,
-		namespace:  actorTemplate.Namespace,
-		cache:      secretCache,
 	}
 
 	for _, ctr := range actorTemplate.Spec.Containers {
@@ -65,23 +61,40 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 			Command: ctr.Command,
 			Readyz:  toAteletReadyz(ctr.Readyz),
 		}
-		for _, env := range ctr.Env {
-			ateletEnv, err := resolver.resolve(ctx, ctr.Name, env)
-			if err != nil {
-				return nil, err
-			}
-			if ateletEnv != nil {
-				ateletCtr.Env = append(ateletCtr.Env, ateletEnv)
-			}
-		}
 		for _, mount := range ctr.VolumeMounts {
 			ateletCtr.VolumeMounts = append(ateletCtr.VolumeMounts, &ateletpb.VolumeMount{
 				Name:      mount.Name,
 				MountPath: mount.MountPath,
 			})
 		}
-
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
+	}
+
+	return workloadSpec
+}
+
+// workloadSpecFromActorTemplateWithEnv builds a WorkloadSpec and resolves each
+// container's env vars against the cluster. kubeClient must be non-nil;
+// secretCache is optional and, when supplied, deduplicates Secret reads.
+func workloadSpecFromActorTemplateWithEnv(ctx context.Context, kubeClient kubernetes.Interface, secretCache *envSecretCache, actorTemplate *atev1alpha1.ActorTemplate) (*ateletpb.WorkloadSpec, error) {
+	workloadSpec := workloadSpecFromActorTemplate(actorTemplate)
+
+	resolver := envResolver{
+		kubeClient: kubeClient,
+		namespace:  actorTemplate.Namespace,
+		cache:      secretCache,
+	}
+
+	for i, ctr := range actorTemplate.Spec.Containers {
+		for _, env := range ctr.Env {
+			ateletEnv, err := resolver.resolve(ctx, ctr.Name, env)
+			if err != nil {
+				return nil, err
+			}
+			if ateletEnv != nil {
+				workloadSpec.Containers[i].Env = append(workloadSpec.Containers[i].Env, ateletEnv)
+			}
+		}
 	}
 
 	return workloadSpec, nil

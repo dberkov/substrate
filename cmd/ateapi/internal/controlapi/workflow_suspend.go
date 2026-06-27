@@ -116,10 +116,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(ctx, nil, nil, state.ActorTemplate)
-	if err != nil {
-		return err
-	}
+	workloadSpec := workloadSpecFromActorTemplate(state.ActorTemplate)
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it

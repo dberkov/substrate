@@ -33,6 +33,155 @@ import (
 
 func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 	tests := []struct {
+		name     string
+		template *atev1alpha1.ActorTemplate
+		want     *ateletpb.WorkloadSpec
+	}{
+		{
+			name: "converts DurableDir volume and mounts",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					PauseImage: "pause",
+					Volumes: []atev1alpha1.Volume{
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "home", MountPath: "/home/user"},
+								{Name: "home", MountPath: "/workspace"},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				PauseImage: "pause",
+				Volumes: []*ateletpb.Volume{
+					{
+						Name:   "home",
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "home", MountPath: "/home/user"},
+							{Name: "home", MountPath: "/workspace"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "skips non-DurableDir volumes",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{Name: "unsupported", VolumeSource: atev1alpha1.VolumeSource{}},
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "home", MountPath: "/workspace"},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name:   "home",
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "home", MountPath: "/workspace"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "container without volume mounts has none",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
+					},
+					Containers: []atev1alpha1.Container{
+						{Name: "main", Image: "main"},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name:   "home",
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+					},
+				},
+				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
+			},
+		},
+		{
+			name: "ignores container env",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							Env: []atev1alpha1.EnvVar{
+								{Name: "LITERAL", Value: ptr.To("plain")},
+								{
+									Name: "SECRET",
+									ValueFrom: &atev1alpha1.EnvVarSource{
+										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "any", Key: "any"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := workloadSpecFromActorTemplate(tt.template)
+			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestWorkloadSpecFromActorTemplateWithEnv(t *testing.T) {
+	tests := []struct {
 		name        string
 		secrets     []runtime.Object
 		template    *atev1alpha1.ActorTemplate
@@ -216,117 +365,12 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 			},
 			wantErrCode: codes.FailedPrecondition,
 		},
-		{
-			name: "converts DurableDir volume and mounts",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					PauseImage: "pause",
-					Volumes: []atev1alpha1.Volume{
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
-					},
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							VolumeMounts: []atev1alpha1.VolumeMount{
-								{Name: "home", MountPath: "/home/user"},
-								{Name: "home", MountPath: "/workspace"},
-							},
-						},
-					},
-				},
-			},
-			want: &ateletpb.WorkloadSpec{
-				PauseImage: "pause",
-				Volumes: []*ateletpb.Volume{
-					{
-						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
-						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
-					},
-				},
-				Containers: []*ateletpb.Container{
-					{
-						Name:  "main",
-						Image: "main",
-						VolumeMounts: []*ateletpb.VolumeMount{
-							{Name: "home", MountPath: "/home/user"},
-							{Name: "home", MountPath: "/workspace"},
-						},
-					},
-				},
-			},
-		},
-		{
-			name: "skips non-DurableDir volumes",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{Name: "unsupported", VolumeSource: atev1alpha1.VolumeSource{}},
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
-					},
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							VolumeMounts: []atev1alpha1.VolumeMount{
-								{Name: "home", MountPath: "/workspace"},
-							},
-						},
-					},
-				},
-			},
-			want: &ateletpb.WorkloadSpec{
-				Volumes: []*ateletpb.Volume{
-					{
-						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
-						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
-					},
-				},
-				Containers: []*ateletpb.Container{
-					{
-						Name:  "main",
-						Image: "main",
-						VolumeMounts: []*ateletpb.VolumeMount{
-							{Name: "home", MountPath: "/workspace"},
-						},
-					},
-				},
-			},
-		},
-		{
-			name: "container without volume mounts has none",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
-					},
-					Containers: []atev1alpha1.Container{
-						{Name: "main", Image: "main"},
-					},
-				},
-			},
-			want: &ateletpb.WorkloadSpec{
-				Volumes: []*ateletpb.Volume{
-					{
-						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
-						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
-					},
-				},
-				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			kubeClient := fake.NewSimpleClientset(tt.secrets...)
-			got, err := workloadSpecFromActorTemplate(context.Background(), kubeClient, nil, tt.template)
+			got, err := workloadSpecFromActorTemplateWithEnv(context.Background(), kubeClient, nil, tt.template)
 			if tt.wantErrCode != codes.OK {
 				if status.Code(err) != tt.wantErrCode {
 					t.Fatalf("error code = %v, want %v: %v", status.Code(err), tt.wantErrCode, err)
@@ -334,7 +378,7 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 				return
 			}
 			if err != nil {
-				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+				t.Fatalf("workloadSpecFromActorTemplateWithEnv failed: %v", err)
 			}
 			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
@@ -343,7 +387,7 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 	}
 }
 
-func TestWorkloadSpecFromActorTemplateCachesSecretsAcrossCalls(t *testing.T) {
+func TestWorkloadSpecFromActorTemplateWithEnvCachesSecretsAcrossCalls(t *testing.T) {
 	ctx := context.Background()
 	secretCache := newEnvSecretCache(envSecretCacheTTL)
 	kubeClient := fake.NewSimpleClientset(
@@ -383,19 +427,19 @@ func TestWorkloadSpecFromActorTemplateCachesSecretsAcrossCalls(t *testing.T) {
 		},
 	}
 
-	if _, err := workloadSpecFromActorTemplate(ctx, kubeClient, secretCache, actorTemplate); err != nil {
-		t.Fatalf("first workloadSpecFromActorTemplate failed: %v", err)
+	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+		t.Fatalf("first workloadSpecFromActorTemplateWithEnv failed: %v", err)
 	}
-	if _, err := workloadSpecFromActorTemplate(ctx, kubeClient, secretCache, actorTemplate); err != nil {
-		t.Fatalf("second workloadSpecFromActorTemplate failed: %v", err)
+	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+		t.Fatalf("second workloadSpecFromActorTemplateWithEnv failed: %v", err)
 	}
 	if got := secretGetCount(kubeClient); got != 1 {
 		t.Fatalf("secret gets before TTL expiry = %d, want 1", got)
 	}
 
 	expireSecretCache(secretCache)
-	if _, err := workloadSpecFromActorTemplate(ctx, kubeClient, secretCache, actorTemplate); err != nil {
-		t.Fatalf("third workloadSpecFromActorTemplate failed: %v", err)
+	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+		t.Fatalf("third workloadSpecFromActorTemplateWithEnv failed: %v", err)
 	}
 	if got := secretGetCount(kubeClient); got != 2 {
 		t.Fatalf("secret gets after TTL expiry = %d, want 2", got)
