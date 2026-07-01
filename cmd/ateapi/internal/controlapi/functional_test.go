@@ -1521,7 +1521,6 @@ func TestSuspendActor(t *testing.T) {
 			ActorTemplateName:      "tmpl1",
 			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 			LatestSnapshotInfo: &ateapipb.SnapshotInfo{
-				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL,
 				Data: &ateapipb.SnapshotInfo_External{
 					External: &ateapipb.ExternalSnapshotInfo{
 						SnapshotUriPrefix: fmt.Sprintf("gs://fake-fake-fake/%s/", id),
@@ -1606,7 +1605,6 @@ func TestPauseActor(t *testing.T) {
 			ActorTemplateName:      "tmpl1",
 			Status:                 ateapipb.Actor_STATUS_PAUSED,
 			LatestSnapshotInfo: &ateapipb.SnapshotInfo{
-				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL,
 				Data: &ateapipb.SnapshotInfo_Local{
 					Local: &ateapipb.LocalSnapshotInfo{
 						SnapshotPrefix:            "id1",

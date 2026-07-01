@@ -453,7 +453,6 @@ func TestListActors(t *testing.T) {
 		ActorTemplateName:      "tmpl1",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 		LatestSnapshotInfo: &ateapipb.SnapshotInfo{
-			Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL,
 			Data: &ateapipb.SnapshotInfo_External{
 				External: &ateapipb.ExternalSnapshotInfo{
 					SnapshotUriPrefix: "gs://b1/f1",
@@ -467,7 +466,6 @@ func TestListActors(t *testing.T) {
 		ActorTemplateName:      "tmpl1",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 		LatestSnapshotInfo: &ateapipb.SnapshotInfo{
-			Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL,
 			Data: &ateapipb.SnapshotInfo_External{
 				External: &ateapipb.ExternalSnapshotInfo{
 					SnapshotUriPrefix: "gs://b1/f2",
