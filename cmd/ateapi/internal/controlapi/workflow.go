@@ -157,8 +157,8 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, 
 	state := &ResumeState{}
 
 	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 30 seconds, with 2 seconds padding for workflow timeout
-	ctx, releaseLock, err := w.acquireActorLock(ctx, atespace, name, 30*time.Second, 2*time.Second)
+	// Lock TTL is 90 seconds, with 2 seconds padding for workflow timeout
+	ctx, releaseLock, err := w.acquireActorLock(ctx, atespace, name, 90*time.Second, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}

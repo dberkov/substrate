@@ -299,8 +299,8 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 						WithFieldPath("metadata.uid")))).
 			WithVolumeMounts(corev1ac.VolumeMount().
 				WithName("run-ateom").
-				WithMountPath(ateompath.BasePath)).
-			WithResources(corev1ac.ResourceRequirements()))
+				WithMountPath(ateompath.BasePath).
+				WithMountPropagation(corev1.MountPropagationHostToContainer)))
 
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}

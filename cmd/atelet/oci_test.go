@@ -499,6 +499,226 @@ func TestUntar_LaterEntryWins(t *testing.T) {
 	})
 }
 
+func TestUntar_OutOfOrderHardlink(t *testing.T) {
+	// The hardlink entry appears BEFORE its target in the tar stream. This
+	// pattern shows up when mutate.Extract concatenates multi-layer OCI
+	// images (e.g. a conda env layer whose entries hardlink back to a
+	// pkgs/ file laid down by a prior layer that lands later in the
+	// concatenated stream). Untar must defer the link and resolve it at
+	// end-of-stream rather than failing.
+	t.Run("target later in stream", func(t *testing.T) {
+		entries := []tarEntry{
+			{name: "envs/", typeflag: tar.TypeDir},
+			{name: "envs/testbed/", typeflag: tar.TypeDir},
+			{name: "envs/testbed/file", typeflag: tar.TypeLink, linkname: "pkgs/file"},
+			{name: "pkgs/", typeflag: tar.TypeDir},
+			{name: "pkgs/file", typeflag: tar.TypeReg, body: "content"},
+		}
+		dir, err := runUntar(t, entries)
+		if err != nil {
+			t.Fatalf("untar: %v", err)
+		}
+		srcInfo, err := os.Stat(filepath.Join(dir, "pkgs/file"))
+		if err != nil {
+			t.Fatalf("stat pkgs/file: %v", err)
+		}
+		dstInfo, err := os.Stat(filepath.Join(dir, "envs/testbed/file"))
+		if err != nil {
+			t.Fatalf("stat envs/testbed/file: %v", err)
+		}
+		if !os.SameFile(srcInfo, dstInfo) {
+			t.Errorf("envs/testbed/file is not a hardlink to pkgs/file")
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "envs/testbed/file")); string(got) != "content" {
+			t.Errorf("envs/testbed/file = %q, want %q", got, "content")
+		}
+	})
+
+	// Parent directory of the new link arrives later in the tar (some
+	// producers emit child entries before their containing dir). Same
+	// linkat ENOENT → must be deferred and resolved.
+	t.Run("parent dir later in stream", func(t *testing.T) {
+		entries := []tarEntry{
+			{name: "src/", typeflag: tar.TypeDir},
+			{name: "src/file", typeflag: tar.TypeReg, body: "data"},
+			{name: "dst/file", typeflag: tar.TypeLink, linkname: "src/file"},
+			{name: "dst/", typeflag: tar.TypeDir},
+		}
+		dir, err := runUntar(t, entries)
+		if err != nil {
+			t.Fatalf("untar: %v", err)
+		}
+		srcInfo, err := os.Stat(filepath.Join(dir, "src/file"))
+		if err != nil {
+			t.Fatalf("stat src/file: %v", err)
+		}
+		dstInfo, err := os.Stat(filepath.Join(dir, "dst/file"))
+		if err != nil {
+			t.Fatalf("stat dst/file: %v", err)
+		}
+		if !os.SameFile(srcInfo, dstInfo) {
+			t.Errorf("dst/file is not a hardlink to src/file")
+		}
+	})
+
+	// Chains of deferred hardlinks must all resolve once their roots are
+	// materialized.
+	t.Run("chained hardlinks resolve", func(t *testing.T) {
+		entries := []tarEntry{
+			{name: "a", typeflag: tar.TypeLink, linkname: "b"},
+			{name: "b", typeflag: tar.TypeLink, linkname: "c"},
+			{name: "c", typeflag: tar.TypeReg, body: "root"},
+		}
+		dir, err := runUntar(t, entries)
+		if err != nil {
+			t.Fatalf("untar: %v", err)
+		}
+		cInfo, err := os.Stat(filepath.Join(dir, "c"))
+		if err != nil {
+			t.Fatalf("stat c: %v", err)
+		}
+		for _, name := range []string{"a", "b"} {
+			info, err := os.Stat(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatalf("stat %s: %v", name, err)
+			}
+			if !os.SameFile(cInfo, info) {
+				t.Errorf("%s is not the same inode as c", name)
+			}
+		}
+	})
+
+	// If a later entry takes the same path, the deferred link must NOT
+	// clobber it at end-of-stream.
+	t.Run("later entry supersedes deferred link", func(t *testing.T) {
+		entries := []tarEntry{
+			{name: "foo", typeflag: tar.TypeLink, linkname: "bar"},
+			{name: "foo", typeflag: tar.TypeReg, body: "winner"},
+			{name: "bar", typeflag: tar.TypeReg, body: "bar-content"},
+		}
+		dir, err := runUntar(t, entries)
+		if err != nil {
+			t.Fatalf("untar: %v", err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "foo"))
+		if err != nil {
+			t.Fatalf("read foo: %v", err)
+		}
+		if string(got) != "winner" {
+			t.Errorf("foo = %q, want %q (later entry must win over deferred link)", got, "winner")
+		}
+		fooInfo, _ := os.Stat(filepath.Join(dir, "foo"))
+		barInfo, _ := os.Stat(filepath.Join(dir, "bar"))
+		if os.SameFile(fooInfo, barInfo) {
+			t.Errorf("foo and bar share an inode; deferred link should have been dropped")
+		}
+	})
+}
+
+func TestUntar_MissingParentDir(t *testing.T) {
+	// OCI layers can emit a child entry before its containing directory
+	// (or skip the explicit dir entry entirely). Untar must auto-create
+	// the missing intermediate parents instead of failing with ENOENT
+	// from mkdirat / openat / symlinkat / linkat.
+	cases := []struct {
+		name    string
+		entries []tarEntry
+		verify  func(t *testing.T, dir string)
+	}{
+		{
+			name: "dir with missing parents",
+			entries: []tarEntry{
+				{name: "a/b/c/d", typeflag: tar.TypeDir, mode: 0o750},
+			},
+			verify: func(t *testing.T, dir string) {
+				info, err := os.Stat(filepath.Join(dir, "a/b/c/d"))
+				if err != nil {
+					t.Fatalf("stat a/b/c/d: %v", err)
+				}
+				if !info.IsDir() {
+					t.Errorf("a/b/c/d is not a directory")
+				}
+			},
+		},
+		{
+			name: "regular file with missing parents",
+			entries: []tarEntry{
+				{name: "a/b/c/file", typeflag: tar.TypeReg, body: "hi"},
+			},
+			verify: func(t *testing.T, dir string) {
+				got, err := os.ReadFile(filepath.Join(dir, "a/b/c/file"))
+				if err != nil {
+					t.Fatalf("read a/b/c/file: %v", err)
+				}
+				if string(got) != "hi" {
+					t.Errorf("file = %q, want %q", got, "hi")
+				}
+			},
+		},
+		{
+			name: "symlink with missing parents",
+			entries: []tarEntry{
+				{name: "a/b/link", typeflag: tar.TypeSymlink, linkname: "target"},
+			},
+			verify: func(t *testing.T, dir string) {
+				got, err := os.Readlink(filepath.Join(dir, "a/b/link"))
+				if err != nil {
+					t.Fatalf("readlink a/b/link: %v", err)
+				}
+				if got != "target" {
+					t.Errorf("symlink target = %q, want %q", got, "target")
+				}
+			},
+		},
+		{
+			name: "hardlink with missing parents",
+			entries: []tarEntry{
+				{name: "src", typeflag: tar.TypeReg, body: "x"},
+				{name: "a/b/link", typeflag: tar.TypeLink, linkname: "src"},
+			},
+			verify: func(t *testing.T, dir string) {
+				src, err := os.Stat(filepath.Join(dir, "src"))
+				if err != nil {
+					t.Fatalf("stat src: %v", err)
+				}
+				dst, err := os.Stat(filepath.Join(dir, "a/b/link"))
+				if err != nil {
+					t.Fatalf("stat a/b/link: %v", err)
+				}
+				if !os.SameFile(src, dst) {
+					t.Errorf("a/b/link is not a hardlink to src")
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, err := runUntar(t, tc.entries)
+			if err != nil {
+				t.Fatalf("untar: %v", err)
+			}
+			tc.verify(t, dir)
+		})
+	}
+}
+
+func TestUntar_HardlinkTargetMissing(t *testing.T) {
+	// If a deferred hardlink target never appears in the tar, untar must
+	// surface a clear unresolved-hardlink error rather than silently
+	// dropping the link or returning a generic ENOENT.
+	entries := []tarEntry{
+		{name: "dir/", typeflag: tar.TypeDir},
+		{name: "dir/link", typeflag: tar.TypeLink, linkname: "dir/nonexistent"},
+	}
+	_, err := runUntar(t, entries)
+	if err == nil {
+		t.Fatalf("untar succeeded, expected unresolved-hardlink error")
+	}
+	if !strings.Contains(err.Error(), "unresolved hardlink") {
+		t.Errorf("error = %q, want it to mention unresolved hardlink", err.Error())
+	}
+}
+
 func TestUntar_PathTraversal(t *testing.T) {
 	tests := []struct {
 		name  string

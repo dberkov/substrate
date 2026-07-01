@@ -30,7 +30,9 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/imagerootfscache"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/overlaymount"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -68,7 +70,19 @@ var (
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 
+	// "overlay" (default) extracts each image-digest's rootfs once
+	// per node and gives each actor a per-actor overlayfs writable
+	// layer on top — turns the ~10s per-actor untar into a
+	// mount(2) syscall for cache hits. "untar" is the fallback
+	// that extracts a fresh tar per actor (pre-cache behavior).
+	imageRootfsCacheMode = pflag.String("image-rootfs-cache", "overlay", "How to provision per-actor container rootfs: overlay|untar.")
+
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
+)
+
+const (
+	rootfsCacheModeOverlay = "overlay"
+	rootfsCacheModeUntar   = "untar"
 )
 
 func main() {
@@ -116,6 +130,19 @@ func main() {
 	pullCache, err := memorypullcache.NewMemoryPullCache(ctx, gcpRegistryAuthn, *localhostRegistryReplacement)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create pull cache", err)
+	}
+
+	switch *imageRootfsCacheMode {
+	case rootfsCacheModeOverlay, rootfsCacheModeUntar:
+	default:
+		serverboot.Fatal(ctx, "Invalid --image-rootfs-cache value", fmt.Errorf("got %q, want overlay or untar", *imageRootfsCacheMode))
+	}
+	var imageRootfsCache *imagerootfscache.Cache
+	if *imageRootfsCacheMode == rootfsCacheModeOverlay {
+		imageRootfsCache, err = imagerootfscache.New(ateompath.ImageRootfsCacheRoot(), pullCache, untar)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create image-rootfs cache", err)
+		}
 	}
 
 	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
@@ -166,6 +193,8 @@ func main() {
 		wrappedAnonGCS,
 		wrappedGCS,
 		pullCache,
+		imageRootfsCache,
+		*imageRootfsCacheMode,
 	)
 
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
@@ -187,10 +216,12 @@ func main() {
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer   *AteomDialer
-	pullCache     *memorypullcache.MemoryPullCache
-	anonGCSClient ategcs.ObjectStorage
-	gcsClient     ategcs.ObjectStorage
+	ateomDialer      *AteomDialer
+	pullCache        *memorypullcache.MemoryPullCache
+	imageRootfsCache *imagerootfscache.Cache // nil iff rootfsMode == "untar"
+	rootfsMode       string                  // "overlay" or "untar"
+	anonGCSClient    ategcs.ObjectStorage
+	gcsClient        ategcs.ObjectStorage
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -202,12 +233,16 @@ func NewService(
 	anonGCSClient ategcs.ObjectStorage,
 	gcsClient ategcs.ObjectStorage,
 	pullCache *memorypullcache.MemoryPullCache,
+	imageRootfsCache *imagerootfscache.Cache,
+	rootfsMode string,
 ) *AteomHerder {
 	wms := &AteomHerder{
-		ateomDialer:   ateomDialer,
-		pullCache:     pullCache,
-		anonGCSClient: anonGCSClient,
-		gcsClient:     gcsClient,
+		ateomDialer:      ateomDialer,
+		pullCache:        pullCache,
+		imageRootfsCache: imageRootfsCache,
+		rootfsMode:       rootfsMode,
+		anonGCSClient:    anonGCSClient,
+		gcsClient:        gcsClient,
 	}
 	return wms
 }
@@ -688,9 +723,8 @@ func (s *AteomHerder) prepareOCIBundles(
 			}
 		}
 
-		if err := prepareOCIDirectory(
+		if err := s.prepareContainerBundle(
 			gCtx,
-			s.pullCache,
 			atespace, actorName,
 			"pause",
 			spec.GetPauseImage(),
@@ -720,9 +754,8 @@ func (s *AteomHerder) prepareOCIBundles(
 			}
 		}
 		g.Go(func() error {
-			if err := prepareOCIDirectory(
+			if err := s.prepareContainerBundle(
 				gCtx,
-				s.pullCache,
 				atespace, actorName,
 				ctr.GetName(),
 				ctr.GetImage(),
@@ -744,6 +777,35 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	return g.Wait()
+}
+
+// prepareContainerBundle dispatches to the overlay or untar OCI-bundle
+// preparation function based on the herder's rootfsMode. Centralizes
+// the branch so callers in prepareOCIBundles stay uniform.
+func (s *AteomHerder) prepareContainerBundle(
+	ctx context.Context,
+	atespace, actorName, containerName, ref string,
+	args []string,
+	env []string,
+	annotations map[string]string,
+	netns string,
+	identityDir string,
+	homedirVolumeMounts []*ateletpb.VolumeMount,
+) error {
+	if s.rootfsMode == rootfsCacheModeOverlay {
+		return prepareOCIDirectoryOverlay(
+			ctx, s.imageRootfsCache,
+			atespace, actorName,
+			containerName, ref, args, env, annotations,
+			netns, identityDir, homedirVolumeMounts,
+		)
+	}
+	return prepareOCIDirectory(
+		ctx, s.pullCache,
+		atespace, actorName,
+		containerName, ref, args, env, annotations,
+		netns, identityDir, homedirVolumeMounts,
+	)
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
@@ -997,10 +1059,43 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return dir.Sync()
 }
 
+// unmountBundleRootfsOverlays detaches any overlay mounted at
+// bundleDir/<container>/rootfs. Called before RemoveAll(bundleDir)
+// so the cleanup doesn't walk into a live mount (which would touch
+// the upperdir contents and, worse, traverse a kernel-owned merged
+// view). Idempotent — paths that aren't mounted are no-ops.
+func unmountBundleRootfsOverlays(bundleDir string) error {
+	entries, err := os.ReadDir(bundleDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("reading bundle dir %q: %w", bundleDir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		rootfs := filepath.Join(bundleDir, e.Name(), "rootfs")
+		if err := overlaymount.Unmount(rootfs); err != nil {
+			return fmt.Errorf("unmounting %q: %w", rootfs, err)
+		}
+	}
+	return nil
+}
+
 func resetActorDirs(atespace, actorName string) error {
 	// Explicitly leave runsc logs dir untouched.
 
 	bundleDir := ateompath.OCIBundleDir(atespace, actorName)
+	// Detach any overlayfs rootfs mounts under the bundle before
+	// RemoveAll walks into them. Idempotent: a non-overlay (untar
+	// mode) bundle has nothing mounted, so Unmount is a no-op. Run
+	// unconditionally so a mode flip across atelet restart still
+	// cleans up the prior mode's state.
+	if err := unmountBundleRootfsOverlays(bundleDir); err != nil {
+		return fmt.Errorf("while unmounting bundle rootfs overlays: %w", err)
+	}
 	if err := os.RemoveAll(bundleDir); err != nil {
 		return wrapFileSystemErr("while deleting bundle dir: %w", err)
 	}
@@ -1056,6 +1151,16 @@ func resetActorDirs(atespace, actorName string) error {
 	}
 	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
 		return wrapFileSystemErr("while creating durable-dir volumes mount dir: %w", err)
+	}
+
+	// Overlay scratch (per-actor upper/work) lives outside ActorPath
+	// because the actor key contains ':' which overlayfs option
+	// parsing reserves. Reset it together with the rest of the
+	// per-actor state. The bundle-rootfs unmount above has already
+	// detached any overlay using these dirs, so RemoveAll is safe.
+	overlayScratchDir := ateompath.OverlayScratchActorDir(atespace, actorName)
+	if err := os.RemoveAll(overlayScratchDir); err != nil {
+		return fmt.Errorf("while deleting overlay scratch dir: %w", err)
 	}
 
 	return nil

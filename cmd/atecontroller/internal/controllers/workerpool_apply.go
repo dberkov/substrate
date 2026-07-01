@@ -47,7 +47,14 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 		).
 		WithVolumeMounts(corev1ac.VolumeMount().
 			WithName("run-ateom").
-			WithMountPath(ateompath.BasePath))
+			WithMountPath(ateompath.BasePath).
+			// HostToContainer so the overlayfs rootfs mounts that
+			// atelet creates on the host (atelet's volumeMount uses
+			// Bidirectional) become visible inside this pod's mount
+			// namespace. Without this, runsc opens the bundle's
+			// rootfs and sees only the empty mountpoint dir, failing
+			// to start with "/pause: no such file or directory".
+			WithMountPropagation(corev1.MountPropagationHostToContainer))
 
 	podSpecAC := corev1ac.PodSpec().
 		WithSecurityContext(corev1ac.PodSecurityContext().

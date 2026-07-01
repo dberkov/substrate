@@ -26,13 +26,17 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/imagerootfscache"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/overlaymount"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
@@ -58,7 +62,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
-	span.SetAttributes(attribute.String("image", ref))
+	span.SetAttributes(attribute.String("image", ref), attribute.String("mode", "untar"))
 	defer span.End()
 
 	bundlePath := ateompath.OCIBundlePath(atespace, actorName, containerName)
@@ -82,7 +86,66 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		return fmt.Errorf("in untar: %w", err)
 	}
 
-	// Bind-mount the per-actor nameentity directory so the workload can read its
+	return writeBundleConfig(bundlePath, rootPath, atespace, actorName, imageCfg, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+}
+
+// prepareOCIDirectoryOverlay is the overlay-mode counterpart to
+// prepareOCIDirectory. Instead of extracting the image tar per actor,
+// it ensures a shared cached rootfs entry exists for the image's
+// digest and overlays a per-actor writable layer on top, producing
+// the same bundle layout (rootfs/ + config.json) that runsc expects.
+//
+// Cold extracts cost ~10 s (one-shot per image-digest per node);
+// warm starts cost a single mount(2) syscall (~ms).
+func prepareOCIDirectoryOverlay(ctx context.Context, imageCache *imagerootfscache.Cache, atespace, actorName, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+	tracer := otel.Tracer("prepareOCIDirectory")
+
+	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
+	span.SetAttributes(attribute.String("image", ref), attribute.String("mode", "overlay"))
+	defer span.End()
+
+	bundlePath := ateompath.OCIBundlePath(atespace, actorName, containerName)
+	rootPath := path.Join(bundlePath, "rootfs")
+	upperPath := ateompath.OCIBundleUpperDir(atespace, actorName, containerName)
+	workPath := ateompath.OCIBundleWorkDir(atespace, actorName, containerName)
+
+	// Defensive: if a previous attempt left an overlay mounted here
+	// (resetActorDirs should have unmounted, but the cleanup path
+	// must not silently corrupt upper). RemoveAll over a live mount
+	// would walk into the merged view; unmount first.
+	if err := overlaymount.Unmount(rootPath); err != nil {
+		return fmt.Errorf("while ensuring %q is unmounted before re-prepare: %w", rootPath, err)
+	}
+	for _, p := range []string{rootPath, upperPath, workPath} {
+		if err := os.RemoveAll(p); err != nil {
+			return fmt.Errorf("while clearing %q: %w", p, err)
+		}
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			return fmt.Errorf("while creating %q: %w", p, err)
+		}
+	}
+
+	digest, lowerDir, imageCfg, err := imageCache.Ensure(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("while ensuring cached rootfs: %w", err)
+	}
+	span.SetAttributes(attribute.String("image.digest", digest))
+
+	if err := overlaymount.Mount(lowerDir, upperPath, workPath, rootPath); err != nil {
+		return fmt.Errorf("while mounting overlay rootfs: %w", err)
+	}
+
+	return writeBundleConfig(bundlePath, rootPath, atespace, actorName, imageCfg, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+}
+
+// writeBundleConfig completes an OCI bundle whose rootfs has already
+// been populated (by untar or by overlay mount): it creates any
+// in-rootfs bind-mount target dirs the spec will reference and
+// writes config.json. Writes into rootPath; for overlay-mode bundles
+// those writes land in upperdir, so they're cleaned up with the
+// rest of the per-actor scratch on stop.
+func writeBundleConfig(bundlePath, rootPath, atespace, actorName string, imageCfg *v1.Config, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+	// Bind-mount the per-actor identity directory so the workload can read its
 	// own ID at IdentityMountPath/ActorIDFileName. The bind target must exist
 	// in the rootfs for the mount to attach.
 	if identityDir != "" {
@@ -100,7 +163,6 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	if err := os.WriteFile(specPath, ociSpecBytes, 0o600); err != nil {
 		return fmt.Errorf("while writing OCI spec: %w", err)
 	}
-
 	return nil
 }
 
@@ -296,7 +358,50 @@ func validateTarName(name string) (cleaned string, skip bool, err error) {
 	return cleaned, false, nil
 }
 
+// ensureParentDir creates any missing intermediate parent directories of
+// name (as a relative-to-root path) with the standard 0o755 mode. If the
+// tar later contains an explicit dir entry for the same path, the
+// duplicate Mkdir returns os.ErrExist and is ignored by the TypeDir
+// handler — meaning the mode set here sticks. That's a known minor
+// inconsistency vs. images whose explicit dir entries carry a non-0o755
+// mode, but it matches the existing repeated-Mkdir behavior and avoids
+// failing the whole untar when child entries arrive before their parent.
+func ensureParentDir(root *os.Root, name string) error {
+	parent := path.Dir(name)
+	if parent == "." || parent == "/" || parent == "" {
+		return nil
+	}
+	if err := root.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("while creating parent dir %q for entry %q: %w", parent, name, err)
+	}
+	return nil
+}
+
+// timingReader wraps an io.Reader to accumulate read latency and bytes
+// read. Used to attribute untar time spent waiting on the upstream
+// (pull-cache decompression, network) vs. local disk work.
+type timingReader struct {
+	r       io.Reader
+	elapsed time.Duration
+	bytes   int64
+}
+
+func (t *timingReader) Read(p []byte) (int, error) {
+	start := time.Now()
+	n, err := t.r.Read(p)
+	t.elapsed += time.Since(start)
+	t.bytes += int64(n)
+	return n, err
+}
+
+// largeFileSpanThreshold is the file size above which untar emits a
+// dedicated child span for the io.Copy. Small enough to surface heavy
+// weights/wheels that dominate extraction; large enough to keep span
+// count bounded on typical images.
+const largeFileSpanThreshold = 16 << 20 // 16 MiB
+
 func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
+	slog.InfoContext(ctx, "@@@@ untar [enter #1]", slog.String("rootPath", rootPath))
 	tracer := otel.Tracer("ateom-gvisor")
 	ctx, span := tracer.Start(ctx, "untar")
 	defer span.End()
@@ -309,9 +414,73 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 	}
 	defer root.Close()
 
-	tarReader := tar.NewReader(tarData)
+	// Out-of-order hardlinks: layers concatenated by mutate.Extract can
+	// emit a TypeLink whose target hasn't been extracted yet (e.g. conda
+	// images where envs/<env>/<file> is hardlinked across layers from
+	// pkgs/<pkg>/<file>). Defer those on ENOENT and drain after the main
+	// loop instead of failing the whole untar. Keyed by name so a later
+	// entry at the same path supersedes a queued link.
+	pendingLinks := map[string]string{}
+	pendingPeak := 0
+
+	// Bucketed counters/timings attached to the outer untar span at the
+	// end so a slow heavy-image case can be attributed to a phase
+	// (upstream read, file write, replacement, parent-dir creation,
+	// drain) without paying for one span per tar entry.
+	var (
+		entriesReg, entriesDir, entriesSym, entriesLink int64
+		bytesWritten                                    int64
+		timeNext, timeCopy, timeReplace, timeMkParent   time.Duration
+	)
+	defer func() {
+		slog.InfoContext(
+			ctx,
+			"@@@@ untar [defer #1]",
+			slog.Int64("entries.regular", entriesReg),
+			slog.Int64("entries.dir", entriesDir),
+			slog.Int64("entries.symlink", entriesSym),
+			slog.Int64("entries.hardlink", entriesLink),
+			slog.Int64("bytes_written", bytesWritten),
+			slog.Int64("ms.tar_next", timeNext.Milliseconds()),
+			slog.Int64("ms.io_copy", timeCopy.Milliseconds()),
+			slog.Int64("ms.replace", timeReplace.Milliseconds()),
+			slog.Int64("ms.mkparent", timeMkParent.Milliseconds()),
+			slog.Int("pending_links_peak", pendingPeak))
+		// span.SetAttributes(
+		// 	attribute.Int64("entries.regular", entriesReg),
+		// 	attribute.Int64("entries.dir", entriesDir),
+		// 	attribute.Int64("entries.symlink", entriesSym),
+		// 	attribute.Int64("entries.hardlink", entriesLink),
+		// 	attribute.Int64("bytes_written", bytesWritten),
+		// 	attribute.Int64("ms.tar_next", timeNext.Milliseconds()),
+		// 	attribute.Int64("ms.io_copy", timeCopy.Milliseconds()),
+		// 	attribute.Int64("ms.replace", timeReplace.Milliseconds()),
+		// 	attribute.Int64("ms.mkparent", timeMkParent.Milliseconds()),
+		// 	attribute.Int("pending_links_peak", pendingPeak),
+		// )
+	}()
+
+	// Wrap the input so upstream-read time (tar parse + pull-cache
+	// decompression + network) is measurable separately from disk-write
+	// time inside io.Copy.
+	tr := &timingReader{r: tarData}
+	defer func() {
+		slog.InfoContext(
+			ctx,
+			"@@@@ untar [defer #2]",
+			slog.Int64("ms.upstream_read", tr.elapsed.Milliseconds()),
+			slog.Int64("bytes_read_upstream", tr.bytes))
+		// span.SetAttributes(
+		// 	attribute.Int64("ms.upstream_read", tr.elapsed.Milliseconds()),
+		// 	attribute.Int64("bytes_read_upstream", tr.bytes),
+		// )
+	}()
+	tarReader := tar.NewReader(tr)
+
 	for {
+		tNext := time.Now()
 		hdr, err := tarReader.Next()
+		timeNext += time.Since(tNext)
 		if errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
@@ -328,13 +497,30 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 
 		mode := hdr.FileInfo().Mode().Perm()
 
+		// later-entry-wins: a new entry at the same path supersedes any
+		// queued deferred link for it.
+		delete(pendingLinks, name)
+
+		// Some OCI layers emit child entries before their containing
+		// directory entry, or omit the explicit directory entries
+		// entirely (mkdirat/openat/symlinkat/linkat would all fail with
+		// ENOENT in that case). Materialize any missing intermediate
+		// parents up front so the per-type handlers don't have to.
+		tParent := time.Now()
+		if err := ensureParentDir(root, name); err != nil {
+			return err
+		}
+		timeMkParent += time.Since(tParent)
+
 		switch hdr.Typeflag {
 		case tar.TypeReg: // Regular file
+			entriesReg++
 			// Same "later entry wins" handling: if any entry exists at the target path,
 			// remove it first. This ensures that:
 			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
 			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
 			// 3. If it's a directory, we recursively remove it so we can write the file.
+			tRepl := time.Now()
 			if _, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
 					return fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
@@ -342,6 +528,7 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
 			}
+			timeReplace += time.Since(tRepl)
 
 			// Stream directly from tarReader to target file to avoid buffering in memory.
 			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
@@ -349,8 +536,35 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 				return fmt.Errorf("while creating file %q: %w", name, err)
 			}
 
-			_, err = io.Copy(outFile, tarReader)
+			// Per-large-file span so the few heavy files that dominate
+			// extraction (model weights, wheels, conda packages) stand
+			// out without exploding span count across millions of small
+			// files in a typical image.
+			var copySpan trace.Span
+			if hdr.Size > largeFileSpanThreshold {
+				_, copySpan = tracer.Start(ctx, "untar.copy")
+				slog.InfoContext(
+					ctx,
+					"@@@@ untar [copy #1]",
+					slog.String("name", name),
+					slog.Int64("size", hdr.Size))
+				// trace.WithAttributes(
+				// 	attribute.String("name", name),
+				// 	attribute.Int64("size", hdr.Size),
+				// ))
+			}
+
+			tCopy := time.Now()
+			n, err := io.Copy(outFile, tarReader)
+			timeCopy += time.Since(tCopy)
+			bytesWritten += n
 			closeErr := outFile.Close()
+
+			if copySpan != nil {
+				// copySpan.SetAttributes(attribute.Int64("bytes", n))
+				slog.InfoContext(ctx, "@@@@ untar [copy #2]", slog.Int64("bytes", n))
+				copySpan.End()
+			}
 
 			if err != nil {
 				return fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
@@ -360,6 +574,7 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 			}
 
 		case tar.TypeDir:
+			entriesDir++
 			err := root.Mkdir(name, mode)
 			if errors.Is(err, os.ErrExist) {
 				// Ignore --- real images produced by ko seem to have directory entries placed multiple times?
@@ -368,14 +583,17 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 			}
 
 		case tar.TypeSymlink:
+			entriesSym++
 			// OCI image layers may re-define the same path across layers (e.g.
 			// an earlier layer creates /var/run as a directory and a later
 			// layer re-declares it as a symlink to /run). Standard tar-extract
 			// semantics are "later entry wins": replace any existing entry.
+			tRepl := time.Now()
 			if existing, err := root.Lstat(name); err == nil {
 				// If it's already the same symlink, skip the unlink+symlink pair.
 				if existing.Mode()&os.ModeSymlink != 0 {
 					if cur, rerr := root.Readlink(name); rerr == nil && cur == hdr.Linkname {
+						timeReplace += time.Since(tRepl)
 						continue
 					}
 				}
@@ -389,11 +607,13 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
 			}
+			timeReplace += time.Since(tRepl)
 			if err := root.Symlink(hdr.Linkname, name); err != nil {
 				return fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
 			}
 
 		case tar.TypeLink:
+			entriesLink++
 			linkname, linkSkip, err := validateTarName(hdr.Linkname)
 			if err != nil {
 				return fmt.Errorf("invalid hardlink target for %q: %w", name, err)
@@ -402,6 +622,7 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 				return fmt.Errorf("invalid hardlink target for %q: empty", name)
 			}
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
+			tRepl := time.Now()
 			if _, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
 					return fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
@@ -409,7 +630,18 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
 			}
+			timeReplace += time.Since(tRepl)
 			if err := root.Link(linkname, name); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					// Out-of-order hardlink: target (or parent dir of the new
+					// link) not yet on disk. Defer and retry after the main
+					// loop has materialized everything else.
+					pendingLinks[name] = linkname
+					if len(pendingLinks) > pendingPeak {
+						pendingPeak = len(pendingLinks)
+					}
+					continue
+				}
 				return fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
 
@@ -421,5 +653,36 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 
 	}
 
+	// Drain deferred hardlinks. Hardlinks can chain (a→b where b is itself
+	// another deferred link → c), so loop until either the queue is empty
+	// or no progress was made in a full pass.
+	return drainPendingLinks(ctx, tracer, root, pendingLinks)
+}
+
+func drainPendingLinks(ctx context.Context, tracer trace.Tracer, root *os.Root, pendingLinks map[string]string) error {
+	_, drainSpan := tracer.Start(ctx, "drain-pending-links")
+	// drainSpan.SetAttributes(attribute.Int("pending_count", len(pendingLinks)))
+	slog.InfoContext(ctx, "@@@@ untar [drain #1]", slog.Int("pending_count", len(pendingLinks)))
+	defer drainSpan.End()
+
+	for len(pendingLinks) > 0 {
+		progress := false
+		for name, linkname := range pendingLinks {
+			err := root.Link(linkname, name)
+			if err == nil {
+				delete(pendingLinks, name)
+				progress = true
+				continue
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("while creating deferred hardlink src=%q target=%q: %w", name, linkname, err)
+			}
+		}
+		if !progress {
+			for name, linkname := range pendingLinks {
+				return fmt.Errorf("unresolved hardlink after extracting all entries: src=%q target=%q (target never created)", name, linkname)
+			}
+		}
+	}
 	return nil
 }

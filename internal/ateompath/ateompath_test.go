@@ -29,6 +29,34 @@ func TestAteomPath(t *testing.T) {
 	}
 }
 
+// TestOverlayOptionPathsHaveNoReservedColon guards the contract that
+// every path passed into an overlayfs mount option (lowerdir,
+// upperdir, workdir) is free of ':' — otherwise the kernel parses it
+// as a lowerdir separator and the mount fails. The actor key
+// routinely contains ':', so the upper/work helpers must NOT derive
+// from ActorPath; this test would have caught the earlier two
+// regressions immediately.
+func TestOverlayOptionPathsHaveNoReservedColon(t *testing.T) {
+	// Realistic input with colons throughout the actor key.
+	atespace := "rl-poc"
+	actorName := "rl-poc-1:bcb1e411-158e-41e3-9103-2dede2d2b8e5"
+	container := "pause"
+	digest := "sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+
+	for _, tc := range []struct {
+		label string
+		path  string
+	}{
+		{"lowerDir", ImageRootfsLowerDir(digest)},
+		{"upperDir", OCIBundleUpperDir(atespace, actorName, container)},
+		{"workDir", OCIBundleWorkDir(atespace, actorName, container)},
+	} {
+		if strings.ContainsAny(tc.path, ",:") {
+			t.Errorf("%s contains reserved overlay-option character: %q", tc.label, tc.path)
+		}
+	}
+}
+
 func TestAteomSocketPathLimits(t *testing.T) {
 	podUID := "123e4567-e89b-12d3-a456-426614174000"
 

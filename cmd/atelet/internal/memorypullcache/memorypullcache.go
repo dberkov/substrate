@@ -69,27 +69,66 @@ func NewMemoryPullCache(ctx context.Context, gcpAuthenticator authn.Authenticato
 	return c, nil
 }
 
-// Fetch returns the image's extracted filesystem tarball and its OCI image config.
-func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser, *v1.Config, error) {
-	// when running in kind we need to rewrite the registry endpoint similar to the
-	// containerd mirror config used in https://kind.sigs.k8s.io/docs/user/local-registry/
-	// for now we have simple opt-in support to rewrite local registries
-	rewritten := false
+// parseRef applies the localhost-registry rewrite and insecure-pull
+// rules, then parses the resulting ref. Shared by Fetch and
+// ResolveDigest so they agree on registry endpoint and auth.
+func (c *MemoryPullCache) parseRef(ref string) (name.Reference, error) {
 	if c.localhostRegistryReplacement != "" {
-		newRef := c.rewriteLocalRegistry(ref)
-		if newRef != ref {
-			ref = newRef
-			rewritten = true
-		}
+		ref = c.rewriteLocalRegistry(ref)
 	}
 	var nameOpts []name.Option
 	// match docker behavior, permit http image pulls for local registries
 	// this avoids needing to distribute TLS certs all around for local development
-	if rewritten || isLocalRegistry(ref) {
+	if isLocalRegistry(ref) {
 		nameOpts = append(nameOpts, name.Insecure)
 	}
+	return name.ParseReference(ref, nameOpts...)
+}
 
-	parsedRef, err := name.ParseReference(ref, nameOpts...)
+// remoteOptions returns the go-containerregistry options used for both
+// digest resolution and blob pulls. ctx is propagated so cancellation
+// tears down in-flight HTTP requests.
+func (c *MemoryPullCache) remoteOptions(ctx context.Context, parsedRef name.Reference) []remote.Option {
+	opts := []remote.Option{
+		remote.WithContext(ctx),
+		remote.WithPlatform(v1.Platform{
+			Architecture: runtime.GOARCH,
+			OS:           "linux",
+		}),
+	}
+	registry := parsedRef.Context().Registry.RegistryStr()
+	if registry == "gcr.io" || strings.HasSuffix(registry, ".gcr.io") || registry == "pkg.dev" || strings.HasSuffix(registry, ".pkg.dev") {
+		if c.gcpAuthenticator != nil {
+			opts = append(opts, remote.WithAuth(c.gcpAuthenticator))
+		}
+	}
+	return opts
+}
+
+// ResolveDigest returns the manifest digest the ref points to. If the
+// ref already includes a digest, that digest is returned without a
+// network round trip. Otherwise the registry is HEAD'd for the
+// manifest (no blob pulls). Used by callers (e.g. image-rootfs cache)
+// that need a stable content-addressed key before deciding whether to
+// pull.
+func (c *MemoryPullCache) ResolveDigest(ctx context.Context, ref string) (string, error) {
+	parsedRef, err := c.parseRef(ref)
+	if err != nil {
+		return "", fmt.Errorf("while parsing reference: %w", err)
+	}
+	if d, ok := parsedRef.(name.Digest); ok {
+		return d.DigestStr(), nil
+	}
+	desc, err := remote.Get(parsedRef, c.remoteOptions(ctx, parsedRef)...)
+	if err != nil {
+		return "", fmt.Errorf("in remote.Get: %w", err)
+	}
+	return desc.Digest.String(), nil
+}
+
+// Fetch returns the image's extracted filesystem tarball and its OCI image config.
+func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser, *v1.Config, error) {
+	parsedRef, err := c.parseRef(ref)
 	if err != nil {
 		return nil, nil, fmt.Errorf("while parsing reference: %w", err)
 	}
@@ -126,27 +165,11 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 	// image from the registry.  This is a chatty process, with multiple round
 	// trips to the registry.
 
-	var remoteOptions []remote.Option
-	remoteOptions = append(remoteOptions,
-		// Propagate caller ctx into go-containerregistry so cancellation tears
-		// down in-flight layer-blob HTTP requests instead of letting them run
-		// to completion in background goroutines (which retain partial-blob
-		// buffers and amplify atelet RSS during ResumeActor death loops).
-		remote.WithContext(ctx),
-		remote.WithPlatform(v1.Platform{
-			Architecture: runtime.GOARCH,
-			OS:           "linux",
-		}),
-	)
-
-	registry := parsedRef.Context().Registry.RegistryStr()
-	if registry == "gcr.io" || strings.HasSuffix(registry, ".gcr.io") || registry == "pkg.dev" || strings.HasSuffix(registry, ".pkg.dev") {
-		if c.gcpAuthenticator != nil {
-			remoteOptions = append(remoteOptions, remote.WithAuth(c.gcpAuthenticator))
-		}
-	}
-
-	img, err := remote.Image(parsedRef, remoteOptions...)
+	// remoteOptions propagates ctx so cancellation tears down in-flight
+	// layer-blob HTTP requests instead of letting them run to completion
+	// in background goroutines (which retain partial-blob buffers and
+	// amplify atelet RSS during ResumeActor death loops).
+	img, err := remote.Image(parsedRef, c.remoteOptions(ctx, parsedRef)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("in remote.Image: %w", err)
 	}
