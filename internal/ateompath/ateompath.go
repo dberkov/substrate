@@ -17,6 +17,7 @@ package ateompath
 
 import (
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -112,6 +113,92 @@ func OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, container
 		OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID),
 		containerName,
 	)
+}
+
+// OverlayScratchRoot is the node-local root for per-actor overlayfs
+// upperdir/workdir trees. Kept OUT of ActorPath because the actor
+// key (namespace:name:id) contains ':' and the kernel overlayfs
+// option parser reserves ':' as a multi-lowerdir separator —
+// putting upper/work under ActorPath would make every overlay
+// mount fail. The merged dir (mount destination) is unaffected,
+// so the rootfs path itself can stay under the bundle.
+func OverlayScratchRoot() string {
+	return filepath.Join(BasePath, "overlay-scratch")
+}
+
+// OverlayScratchActorDir holds all overlay scratch state for one
+// actor. Its name is the actor key with ':' replaced by '_' so it
+// can appear inside overlayfs option strings without being
+// misparsed.
+func OverlayScratchActorDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		OverlayScratchRoot(),
+		DigestDirName(actorTemplateNamespace+":"+actorTemplateName+":"+actorID),
+	)
+}
+
+// OCIBundleUpperDir is the per-actor overlayfs upperdir for a container's
+// rootfs. Lives under OverlayScratchActorDir (not the bundle dir) for
+// the option-parser reason described on OverlayScratchRoot.
+func OCIBundleUpperDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OverlayScratchActorDir(actorTemplateNamespace, actorTemplateName, actorID),
+		containerName,
+		"upper",
+	)
+}
+
+// OCIBundleWorkDir is the per-actor overlayfs workdir required by the
+// kernel overlay driver. Same lifecycle as OCIBundleUpperDir.
+func OCIBundleWorkDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OverlayScratchActorDir(actorTemplateNamespace, actorTemplateName, actorID),
+		containerName,
+		"work",
+	)
+}
+
+// ImageRootfsCacheRoot is the node-local cache of extracted image
+// rootfs trees, keyed by image manifest digest. Each entry is a
+// lowerdir shared across all actors that pull the same image on this
+// node.
+//
+// TODO(image-rootfs-cache): bounded LRU eviction with refcounts. v1
+// lets this grow unbounded; operator-visible failure is ENOSPC during
+// extract.
+func ImageRootfsCacheRoot() string {
+	return filepath.Join(BasePath, "image-rootfs-cache")
+}
+
+// DigestDirName turns a digest like "sha256:abc..." into a name safe
+// to use as the on-disk cache directory. The ':' separator is
+// reserved in overlayfs lowerdir options (used to list multiple
+// lowerdirs as "a:b:c"), so a path containing it would be misparsed
+// by the kernel; we replace it with '_'. Round-trippable for any
+// purpose we care about (the digest is recomputed from the ref, not
+// recovered from the directory name).
+func DigestDirName(digest string) string {
+	return strings.ReplaceAll(digest, ":", "_")
+}
+
+// ImageRootfsCacheEntryDir is the per-digest cache directory holding
+// the extracted rootfs and the .ready marker.
+func ImageRootfsCacheEntryDir(digest string) string {
+	return filepath.Join(ImageRootfsCacheRoot(), DigestDirName(digest))
+}
+
+// ImageRootfsLowerDir is the extracted rootfs path inside a cache
+// entry — used as the overlayfs lowerdir.
+func ImageRootfsLowerDir(digest string) string {
+	return filepath.Join(ImageRootfsCacheEntryDir(digest), "rootfs")
+}
+
+// ImageRootfsReadyMarker is the file whose presence indicates the
+// cache entry's rootfs is fully extracted and safe to use. Created
+// atomically after extraction; absence (or partial cache dir) means
+// the entry is in-progress or was abandoned by a crashed atelet.
+func ImageRootfsReadyMarker(digest string) string {
+	return filepath.Join(ImageRootfsCacheEntryDir(digest), ".ready")
 }
 
 func RunscDebugLogDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {

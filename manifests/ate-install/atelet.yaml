@@ -105,6 +105,13 @@ spec:
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ateom-gvisor
+          # Bidirectional so the overlayfs rootfs mounts atelet makes
+          # under this hostPath propagate to the host (and from there
+          # into ateom's mount namespace, which mounts the same
+          # hostPath with HostToContainer). Without this, ateom and
+          # runsc see only the empty mountpoint dir and fail with
+          # "/pause: no such file or directory". Requires privileged.
+          mountPropagation: Bidirectional
       volumes:
       - name: run-ateom
         hostPath:
