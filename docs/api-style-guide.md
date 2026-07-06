@@ -15,7 +15,7 @@ APIs are structured around **resources** (nouns) and a small set of standard **m
 Rules:
 - Every primary noun the API exposes is a resource.
 - Standard methods are strongly preferred. Custom methods are the exception, not the norm.
-- The resource schema must be identical across all standard methods that reference it (i.e., Get, Create, and Update all return the same `Actor` message).
+- The resource schema must be identical across all standard methods that reference it (i.e., Get, Create, Update, and Delete all return the same `Actor` message).
 
 ---
 
@@ -28,7 +28,7 @@ AIP-122 identifies resources by a single opaque path string (e.g., `publishers/1
 Resources are either **atespace-scoped** or **global-scoped**. Scope is a fixed property of the resource type, not of individual instances. For example, `Actor` resources
 are **atespace-scoped**, whereas `Atespace` resources are naturally **global-scoped**.
 
-### 2.1 Atespace-scoped resources
+### 2.1 Identity and scope
 
 * Atespace-scoped resources belong to an atespace. Their identity is `(atespace, name)`, unique within the resource type.
 * Global-scoped resources are global across the entire deployment and do not belong to any atespace. For these, the identity is `name` alone.
@@ -37,7 +37,7 @@ In both cases, a `metadata` field contains both `atespace` and `name`. For globa
 
 ```proto
 message Actor {
-  // The atespace this actor belongs to.
+  // Common resource metadata: atespace, name, and other standard fields (see section #6).
   ResourceMetadata metadata = 1;
 
   // ... other fields
@@ -47,7 +47,7 @@ message Actor {
 message ResourceMetadata {
   // The atespace this resource belongs to. Empty if the resource has global-scope.
   string atespace = 1;
-  // The name of this resource, unique within its atespace.
+  // The name of this resource, unique within its atespace (or globally, for global-scoped resources).
   string name = 2;
 
   // ... other common resource fields
@@ -57,7 +57,7 @@ message ResourceMetadata {
 - All resources in Substrate must have a `ResourceMetadata metadata = 1` field to hold common fields, which includes both `atespace` and `name`.
 - If the resource type has global-scope, the `atespace` field must be always empty.
 
-### 2.3 Character constraints
+### 2.2 Character constraints
 
 Both `atespace` and `name` must be valid resource names.
 A valid resource name must comply with the following rules:
@@ -70,7 +70,7 @@ A valid resource name must comply with the following rules:
 
 Resource names are valid RFC-1123 DNS labels.
 
-### 2.4 `ObjectRef` — reference type
+### 2.3 `ObjectRef` — reference type
 
 The `ObjectRef` message represents a *pointer* to a Substrate resource.
 
@@ -101,11 +101,10 @@ message DeleteActorRequest {
 
 ```proto
 message Actor {
-  string atespace = 1;
-  string name     = 2;
+  ResourceMetadata metadata = 1;
 
   // The ActorTemplate this actor was derived from.
-  ObjectRef actor_template = 3;
+  ObjectRef actor_template = 2;
 
   // ... other fields
 }
@@ -117,6 +116,8 @@ Note that this assumes that ActorTemplates are also resources in the substrate g
 - Do not embed the full resource message as a reference field.
 - Do not use a single combined string like `"atespace/name"`. Callers would have to parse it.
 - Do not use a plain `string {resource}_name` field for global-scoped references — use `ObjectRef` for consistency and type safety.
+
+TODO: Decide the convention for cross-references that point to a resource in the *same* atespace as the referrer: whether the caller must fill in `atespace` explicitly, or leaves it empty and the server resolves/validates it against the referrer's atespace. Current leaning is to require it be filled in.
 
 ---
 
@@ -204,6 +205,7 @@ Rules:
 - Other meta fields such as `uid`, timestamps, `version`, etc, are server side generated, and ignored when specified.
 - If a resource already exists with the same `(atespace, name)`: return `ALREADY_EXISTS`.
 - `actor.metadata.atespace` must be specified iff the resource type is atespace-scoped, otherwise the service must return `INVALID_ARGUMENT`.
+- Non-resource "control" fields (e.g. dry-run, idempotency token) belong in a shared `CreateOptions` message embedded as an `options` field, following the `DeleteOptions` pattern (section #3.5) — not as loose top-level fields on the request.
 
 **Divergence from AIP-133:** AIP-133 separates `parent` + `{resource}_id` from the resource body because AIP-122 makes the resource `name` field output-only (constructed by the server from the parent path). In Substrate's model, `atespace` and `name` are directly caller-specified identity fields on the resource, so duplicating them at the top level of the request adds no information and creates ambiguity about which one wins. The embedded resource is the single source of truth for identity on create.
 
@@ -218,7 +220,7 @@ rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
 
 message UpdateActorRequest {
   // The actor to update.
-  // The actor's atespace and name fields identify which resource to update.
+  // actor.metadata.atespace and actor.metadata.name identify which resource to update.
   Actor actor = 1;
 
   // The set of fields to update. Required.
@@ -233,11 +235,13 @@ Rules:
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
 - `update_mask` **must** be of type `google.protobuf.FieldMask` and **must** be named `update_mask`.
 - `update_mask` is **required**. An absent or empty mask **must** return `INVALID_ARGUMENT`.
-- If `update_mask` includes an immutable field (e.g. output only), **must** return `INVALID_ARGUMENT`.
+- `update_mask` may only enumerate **client-mutable** fields. Naming any non-mutable field **must** return `INVALID_ARGUMENT`. Two distinct cases qualify:
+  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`). These are excluded even though some of them (`version`, `update_time`) *do* change — being server-owned, not immutable, is what disqualifies them.
+  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`).
 - The special value `*` is **not supported**. Clients must enumerate the exact fields to update.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
-- Additional "control" fields can be added to the request message to control the semantics of the operation (e.g. dry-run).
+- The `version` and `uid` fields in the embedded resource's `metadata` are honored as optional preconditions (see section #7). They are control fields, not updatable fields, and **must not** be listed in `update_mask`.
 
 **Divergence from AIP-134:** AIP-134 makes `update_mask` optional (omission implies updating all populated fields) and requires support for `*`. Substrate requires an explicit mask.
 
@@ -249,9 +253,22 @@ Rules:
 rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
 
 message DeleteActorRequest {
-  ObjectRef actor   = 1;
+  ObjectRef actor = 1;
 
-  // ... other fields
+  // Optional per-delete options. Reused across every Delete<Type>Request.
+  DeleteOptions options = 2;
+}
+
+// DeleteOptions carries per-delete controls. Today it holds optional
+// preconditions that guard against acting on a resource that is not in the
+// state the caller expects (see section #7). Future delete-specific controls
+// (e.g. dry-run) should be added here.
+message DeleteOptions {
+  // If non-zero, delete only if the server's current version matches.
+  int64 version = 1;
+  // If non-empty, delete only if the server's current uid matches. Guards
+  // against name reuse across lifecycles (see section #7).
+  string uid = 2;
 }
 ```
 
@@ -260,7 +277,8 @@ Rules:
 - Response **must** be the deleted resource.
 - Request **must** identify the resource with an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
 - If the resource does not exist: return `NOT_FOUND`.
-- Additional "control" fields can be added to the request message to control the semantics of the operation (e.g. dry-run, or UID precondition check).
+- `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
+- Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.
 
 
 TODO: Delete operations are synchronous, but might revisit this and introduce the concept of soft-deletion to 
@@ -303,12 +321,31 @@ Rules:
 - Adjectives come before the noun: `suspended_actors`, not `actors_suspended`.
 - Avoid prepositions in field names: `error_reason`, not `reason_for_error`.
 
-### 5.1 Field presence (`optional`)
+### 5.1 Enum naming
+
+*Follows [AIP-126](https://google.aip.dev/126). Diverges by requiring two of AIP-126's recommendations.*
+
+- Enum type names **must** use `PascalCase`, like message names: `ActorState`.
+- Enum values **must** use `UPPER_SNAKE_CASE`.
+- Package-level enum values **must** be prefixed with the enum name. Some languages (including C++) hoist enum values into the parent namespace, which can cause conflicts between enums in the same proto package. (Values of a *nested* enum **must not** be prefixed.)
+- The zero value **must** be `{ENUM_NAME}_UNSPECIFIED` and mean "not set."
+
+```proto
+enum ActorState {
+  ACTOR_STATE_UNSPECIFIED = 0;
+  ACTOR_STATE_RUNNING     = 1;
+  ACTOR_STATE_SUSPENDED   = 2;
+}
+```
+
+**Divergence from AIP-126:** AIP-126 makes the enum-name prefix and the `_UNSPECIFIED` zero value *recommended*; Substrate requires both.
+
+### 5.2 Field presence (`optional`)
 
 Use the `optional` keyword on a scalar field **only** when null and the zero value (`false`, `0`, `""`) are semantically distinct for that field's meaning. Do not use `optional` universally or as a workaround for update semantics — the required `update_mask` handles that.
 
 ```proto
-// Only if "unrated" is meaningfully different from "rated 0":
+// Only if "no priority" is meaningfully different from "priority 0":
 optional int32 priority = 5;
 
 // No optional needed — false and unset mean the same thing here:
@@ -327,8 +364,13 @@ All resources in Substrate must have a `ResourceMetadata metadata = 1` field to 
 
 ```proto
 message ResourceMetadata {
+  // atespace is the namespace the resource belongs to. Empty for global-scoped
+  // resources. Caller-specified at creation and immutable thereafter.
   string atespace = 1;
-  string name     = 2;
+
+  // name is the resource's name, unique within its atespace (or globally, for
+  // global-scoped resources). Caller-specified at creation and immutable thereafter.
+  string name = 2;
 
   // uid is a server-assigned, globally unique identifier for this resource.
   // Immutable throughout the lifecycle of the resource.
@@ -345,26 +387,42 @@ message ResourceMetadata {
 }
 ```
 
-### 6.1 `uid`
+### 6.1 `atespace`
+
+- Type: `string`.
+- The atespace (namespace) the resource belongs to. Part of the resource's identity (see section #2).
+- Caller-specified at creation; immutable thereafter.
+- Must be a valid resource name (see section #2.2).
+- Must be non-empty for atespace-scoped resources and empty for global-scoped resources.
+
+### 6.2 `name`
+
+- Type: `string`.
+- The resource's name — unique within its `atespace` for atespace-scoped resources, or globally for global-scoped resources.
+- Caller-specified at creation; immutable thereafter.
+- Must be a valid resource name (see section #2.2).
+- Together, `(atespace, name)` identify a resource at a point in time. `uid` (see section #6.3) identifies it across time, distinguishing lifecycles that reuse the same `(atespace, name)`.
+
+### 6.3 `uid`
 
 - Type: `string`.
 - A server-assigned [UUID4](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)).
 - Useful for correlation across logs, events, and audit trails where the resource `name` may not be available. Also useful
 for controllers that need to do bookkeeping and track state associated with a resource.
 
-### 6.2 `version`
+### 6.4 `version`
 
 - Type: `int64`.
-- Monotonically increasing number which increments on every resource update. Allows clients to do opportunistic locking
+- Increased on every mutation; the increment amount is not part of the contract. Allows clients to do optimistic locking
 on resource updates. Also establishes a total order on "snapshots" of a given resource. See section #7.
 
-### 6.3 `create_time`
+### 6.5 `create_time`
 
 - Type: `google.protobuf.Timestamp`.
 - Records when the resource was created.
 - Set once at creation; never updated.
 
-### 6.4 `update_time`
+### 6.6 `update_time`
 
 - Type: `google.protobuf.Timestamp`.
 - Records when the resource was last modified by a user action (Create, Update, or a custom mutating method).
@@ -380,7 +438,7 @@ When two clients update the same resource concurrently, the second write may sil
 
 Substrate uses a field named **`version`** of type `int64` for this. AIP-154 uses an opaque `etag` string; we diverge for a concrete reason: Substrate maintains an in-memory worker cache that guards against applying stale watch events over newer cached state using a numeric `>=` comparison. An opaque string cannot serve this role — the ordering guarantee IS the implementation contract, so the field type should reflect it.
 
-The name `version` is intentional: it increments on every write (like Kubernetes's `resourceVersion`) and is a transparent, comparable integer (like Kubernetes's `generation`). It serves both roles in one field, so neither Kubernetes name fits cleanly.
+The name `version` is intentional: it increases on every write (like Kubernetes's `resourceVersion`) and is a transparent, comparable integer (like Kubernetes's `generation`). It serves both roles in one field, so neither Kubernetes name fits cleanly.
 
 ### 7.1 The `version` field
 
@@ -397,24 +455,30 @@ message ResourceMetadata {
 ```
 
 - Type: `int64`.
-- Output-only: the server sets it. Starts at `1` on creation, incremented by `1` on every mutation.
+- Output-only: the server sets it. Assigned on creation and strictly increased on every mutation. The magnitude of the increase is **not** part of the contract, and clients must not assume consecutive versions differ by exactly `1`.
 - Monotonically increasing. A higher value is always newer.
 - Updated on every mutation — both user-visible changes and system-internal ones (e.g. the scheduler binding a worker).
 
-### 7.2 Using `version` to guard writes
+### 7.2 Using `version` and `uid` to guard writes
 
-A client that wants to guard against concurrent modification echoes back the `version` it last observed. The server rejects the request if the value no longer matches.
+A client that wants to guard a mutation against acting on unexpected state echoes back the `version` and/or `uid` it last observed. The server rejects the request if either value no longer matches.
 
-**Update:** `version` rides in the embedded resource body:
+The two guards protect against different things:
+
+- **`version`** guards against *concurrent modification*. It changes on every write, so echoing it back detects that someone else wrote in between (the lost-update problem). A `version` guard can legitimately reject an otherwise-valid read-modify-write — that is the point.
+- **`uid`** guards against *name reuse across lifecycles*. `(atespace, name)` is unique only at a point in time; `uid` is unique across time. Because `uid` is immutable within a lifecycle, it never causes a spurious rejection within that lifecycle — it only fires when the name has been deleted and recreated as a different resource. This catches the ABA case that `version` alone cannot: a stale write whose `version` happens to match the *new* resource.
+
+**Update:** both guards are specified in the embedded resource's `metadata`:
 
 ```proto
-// Client read actor at version 5, now updating:
+// Client read actor at version 5 (uid "a1b2..."), now updating:
 UpdateActorRequest {
   actor: Actor {
     metadata: ResourceMetadata {
       atespace: "my-space"
       name:     "my-actor"
-      version:  5            // guard: fail if server is not at 5
+      version:  5            // guard: fail unless server is at version 5
+      uid:      "a1b2..."    // guard: fail unless server uid matches
     }
     worker_selector: ...
   }
@@ -422,21 +486,25 @@ UpdateActorRequest {
 }
 ```
 
-- Note that the `version` field doesn't need to be included in the update mask, as it's a control field managed by the server, not
-a mutable field.
+- `version` and `uid` are control fields managed by the server, not mutable fields. They **must not** be listed in `update_mask`.
+- A client that wants a blind by-name update must leave both `version` (0) and `uid` ("") unset.
 
-**Delete and custom methods:** add an optional `int64 version` field to the request:
+**Delete:** the guards are specified in a `DeleteOptions` message, reused across every `Delete<Type>Request`:
 
 ```proto
 message DeleteActorRequest {
-  ObjectRef actor  = 1;
-  // Optional. If non-zero, the deletion is rejected with ABORTED if the
-  // server's current version does not match.
-  int64 version   = 2;
+  ObjectRef     actor   = 1;
+  DeleteOptions options = 2;
+}
+
+message DeleteOptions {
+  int64  version = 1; // 0  = skip
+  string uid     = 2; // "" = skip
 }
 ```
 
-**Server behavior:**
-- If the client provides a non-zero `version` that does not match the server's current value: return `ABORTED`.
-- If the client omits `version` (zero value, the proto3 default): skip the freshness check and proceed.
-- The freshness check is always optional from the client's perspective.
+**Server behavior (applies to `version` and `uid` alike):**
+- If the client provides a non-zero `version` or a non-empty `uid` that does not match the server's current value: return `ABORTED`.
+- If the client omits a guard (the proto3 zero value): skip that check.
+
+Both guards are always **optional** from the client's perspective: a client that omits `version` and `uid` gets last-writer-wins, and the server does not require either.
