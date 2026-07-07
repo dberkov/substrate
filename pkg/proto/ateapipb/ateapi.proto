@@ -82,8 +82,8 @@ message SnapshotInfo {
     LocalSnapshotInfo    local    = 3;
   }
 
-  // type
   reserved 1;
+  reserved "type";
 }
 
 // Selector matches worker pools by label.
