@@ -1020,12 +1020,35 @@ func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
 	}
 }
 
-// writeFileAtomic writes data to path by writing a temp file in the same
-// directory, syncing, and renaming it over the target, then syncing the
+// writeFileAtomic writes data to path atomically vs concurrent readers via
+// temp file + rename. It does NOT fsync: the identity directory is regenerated
+// on every actor resume, so durability across power loss isn't required and
+// the fsync latency (hundreds of ms on the backing volume) isn't worth paying.
+// perm is applied at open time and is subject to the process umask.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmpName := path + ".tmp." + strconv.FormatInt(time.Now().UnixNano(), 36)
+	f, err := os.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// writeFileAtomicOriginal writes data to path by writing a temp file in the
+// same directory, syncing, and renaming it over the target, then syncing the
 // parent directory so the rename is durable. The identity directory is
 // bind-mounted into actors, so the file must change atomically: a reader
 // must never observe a truncated or partially written value.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+func writeFileAtomicOriginal(path string, data []byte, perm os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
