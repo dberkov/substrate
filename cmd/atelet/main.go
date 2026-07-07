@@ -489,12 +489,16 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	tracer := otel.Tracer("atelet.Restore")
 	atespace, actorName := req.GetAtespace(), req.GetActorName()
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
 	// node or the disk itself.
-	if err := resetActorDirs(atespace, actorName); err != nil {
-		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
+	_, resetSpan := tracer.Start(ctx, "resetActorDirs")
+	resetErr := resetActorDirs(atespace, actorName)
+	resetSpan.End()
+	if resetErr != nil {
+		return nil, fmt.Errorf("while resetting actor dirs: %w", resetErr)
 	}
 
 	checkpointDir := ateompath.RestoreStateDir(atespace, actorName)
@@ -509,31 +513,41 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// request no longer carries the sandbox config). Fetch the (small) manifest
 	// first — both the checkpoint download and the OCI/asset prep below need it.
 	var sandboxRec *sandboxAssetsRecord
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		prefix := req.GetExternalConfig().GetSnapshotUriPrefix()
-		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, strings.TrimSuffix(prefix, "/")+"/"+sandboxManifestName)
-		if err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while fetching snapshot manifest: %w", err), ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject)
-		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		localCheckpointDir := ateompath.LocalCheckpointsDir(atespace, actorName)
-		snapshotPrefix := req.GetLocalConfig().GetSnapshotPrefix()
-		manifest, err := os.ReadFile(filepath.Join(localCheckpointDir, snapshotPrefix, sandboxManifestName))
-		if err != nil {
-			if isTerminalFileSystemErr(err) {
-				return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), err)
+	manifestErr := func() error {
+		ctx, span := tracer.Start(ctx, "fetchSandboxManifest")
+		defer span.End()
+		switch req.GetType() {
+		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
+			span.SetAttributes(attribute.String("checkpoint.type", "external"))
+			prefix := req.GetExternalConfig().GetSnapshotUriPrefix()
+			manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, strings.TrimSuffix(prefix, "/")+"/"+sandboxManifestName)
+			if err != nil {
+				return ateerrors.CrashIfReason(ctx, fmt.Errorf("while fetching snapshot manifest: %w", err), ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject)
 			}
-			return nil, fmt.Errorf("while reading local snapshot manifest: %w", err)
+			if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
+				return ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
+			}
+		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+			span.SetAttributes(attribute.String("checkpoint.type", "local"))
+			localCheckpointDir := ateompath.LocalCheckpointsDir(atespace, actorName)
+			snapshotPrefix := req.GetLocalConfig().GetSnapshotPrefix()
+			manifest, err := os.ReadFile(filepath.Join(localCheckpointDir, snapshotPrefix, sandboxManifestName))
+			if err != nil {
+				if isTerminalFileSystemErr(err) {
+					return ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), err)
+				}
+				return fmt.Errorf("while reading local snapshot manifest: %w", err)
+			}
+			if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
+				return ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
+			}
+		default:
+			return fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
-		}
-	default:
-		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
+		return nil
+	}()
+	if manifestErr != nil {
+		return nil, manifestErr
 	}
 
 	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
@@ -546,6 +560,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	var assetPaths map[string]string
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
+		gctx, span := tracer.Start(gctx, "downloadCheckpoint")
+		defer span.End()
 		t := time.Now()
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
@@ -561,12 +577,17 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil
 	})
 	g.Go(func() error {
+		assetsCtx, assetsSpan := tracer.Start(gctx, "ensureSandboxAssets")
 		var err error
-		if assetPaths, err = s.ensureSandboxAssets(gctx, sandboxRec); err != nil {
+		assetPaths, err = s.ensureSandboxAssets(assetsCtx, sandboxRec)
+		assetsSpan.End()
+		if err != nil {
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
+		bundlesCtx, bundlesSpan := tracer.Start(gctx, "prepareOCIBundles")
+		defer bundlesSpan.End()
 		t := time.Now()
-		if err := s.prepareOCIBundles(gctx, atespace, actorName, req.GetSpec(), req.GetTargetAteomUid()); err != nil {
+		if err := s.prepareOCIBundles(bundlesCtx, atespace, actorName, req.GetSpec(), req.GetTargetAteomUid()); err != nil {
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
 		}
 		dBundles = time.Since(t)
@@ -576,7 +597,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	dialCtx, dialSpan := tracer.Start(ctx, "dialAteom")
+	client, err := s.dialAteom(dialCtx, req.GetTargetAteomUid())
+	dialSpan.End()
 	if err != nil {
 		return nil, err
 	}
@@ -601,9 +624,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// Record the (manifest-pinned) sandbox binaries on-node so a subsequent
 	// Checkpoint of this restored actor can re-pin the same version.
-	if err := writeSandboxRecord(atespace, actorName, sandboxRec); err != nil {
+	_, writeSpan := tracer.Start(ctx, "writeSandboxRecord")
+	writeErr := writeSandboxRecord(atespace, actorName, sandboxRec)
+	writeSpan.End()
+	if writeErr != nil {
 		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
-		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
+		return nil, ateerrors.CrashIfReason(ctx, writeErr, ateerrors.ReasonTerminalFileSystemError)
 	}
 
 	slog.InfoContext(ctx, "Restore timing breakdown", slog.String("actor", actorName),
@@ -615,13 +641,28 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 }
 
 func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string, files []string) error {
+	tracer := otel.Tracer("atelet.Restore")
 	for _, fileName := range files {
 		if ctx.Err() != nil {
 			return fmt.Errorf("context cancelled: %w", ctx.Err())
 		}
 		src := filepath.Join(srcDir, snapshotPrefix, fileName)
 		dst := filepath.Join(dstDir, fileName)
-		if _, err := copyFile(src, dst); err != nil {
+		_, span := tracer.Start(ctx, "copyCheckpointFile")
+		span.SetAttributes(attribute.String("file", fileName))
+		// Hardlink first — constant-time regardless of file size, safe here
+		// because runsc restore only reads these files. Fall back to a byte
+		// copy on any error (cross-device, permissions, etc.).
+		if err := os.Link(src, dst); err == nil {
+			span.SetAttributes(attribute.String("method", "link"))
+			span.End()
+			continue
+		}
+		span.SetAttributes(attribute.String("method", "copy"))
+		n, err := copyFile(src, dst)
+		span.SetAttributes(attribute.Int64("bytes", n))
+		span.End()
+		if err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
 	}

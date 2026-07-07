@@ -29,6 +29,7 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -359,13 +360,19 @@ func (s *FinalizeRunningStep) IsComplete(ctx context.Context, input *ResumeInput
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
 func (s *FinalizeRunningStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
+	tracer := otel.Tracer("controlapi")
+
+	getCtx, getSpan := tracer.Start(ctx, "store.GetActor")
+	latestActor, err := s.store.GetActor(getCtx, input.Atespace, input.ActorName)
+	getSpan.End()
 	if err != nil {
 		return err
 	}
 
 	latestActor.Status = ateapipb.Actor_STATUS_RUNNING
-	updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
+	updateCtx, updateSpan := tracer.Start(ctx, "store.UpdateActor")
+	updatedActor, err := s.store.UpdateActor(updateCtx, latestActor, latestActor.GetMetadata().GetVersion())
+	updateSpan.End()
 	if err != nil {
 		return err
 	}

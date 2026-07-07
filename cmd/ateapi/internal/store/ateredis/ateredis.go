@@ -57,10 +57,14 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var tracer = otel.Tracer("ateredis")
 
 type workerPubSubMsg struct {
 	Type   int    `json:"t"`
@@ -329,7 +333,10 @@ func (s *Persistence) DebugClearAll(ctx context.Context) error {
 func (s *Persistence) GetActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
 	dbKey := actorDBKey(atespace, name)
 
+	_, span := tracer.Start(ctx, "redis.get")
+	span.SetAttributes(attribute.String("key", dbKey))
 	dbActorBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
+	span.End()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, store.ErrNotFound
@@ -543,8 +550,12 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 	// stomp the caller's copy.
 	dbActor := proto.Clone(actor).(*ateapipb.Actor)
 
-	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		currentVal, err := tx.Get(ctx, dbKey).Bytes()
+	watchCtx, watchSpan := tracer.Start(ctx, "redis.watch")
+	watchSpan.SetAttributes(attribute.String("key", dbKey))
+	err := s.rdb.Watch(watchCtx, func(tx *redis.Tx) error {
+		_, getSpan := tracer.Start(watchCtx, "redis.watch.get")
+		currentVal, err := tx.Get(watchCtx, dbKey).Bytes()
+		getSpan.End()
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
 				return fmt.Errorf("actor does not exist")
@@ -580,12 +591,16 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 			return fmt.Errorf("in protojson.Marshal: %w", err)
 		}
 
-		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, dbKey, newVal, 0)
+		_, execSpan := tracer.Start(watchCtx, "redis.watch.exec")
+		execSpan.SetAttributes(attribute.Int("bytes", len(newVal)))
+		_, err = tx.TxPipelined(watchCtx, func(pipe redis.Pipeliner) error {
+			pipe.Set(watchCtx, dbKey, newVal, 0)
 			return nil
 		})
+		execSpan.End()
 		return err
 	}, dbKey)
+	watchSpan.End()
 
 	if err != nil {
 		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
