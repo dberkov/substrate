@@ -26,13 +26,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
@@ -94,6 +94,9 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 // cached, so re-fetching at Checkpoint/Restore is a no-op once present.
 func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
+		if isTerminalFileSystemErr(err) {
+			return nil, fmt.Errorf("%w: while creating static files dir: %w", ateerrors.ReasonTerminalFileSystemError, err)
+		}
 		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}
 	paths := make(map[string]string, len(rec.Assets))
@@ -116,15 +119,15 @@ func runscPathFor(paths map[string]string) string { return paths["runsc"] }
 // returns immediately.
 func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
 	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
-		return "", status.Error(codes.InvalidArgument, err.Error())
+		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 
 	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
 	_, err := os.Stat(localPath)
-	if err == nil { // EQUALS nil
+	if err == nil {
 		return localPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("while stat-ing local file: %w", err)
+		return "", wrapFileSystemErr("while stat-ing local file", err)
 	}
 
 	// Assets live in one of two places: public buckets (gVisor's runsc in
@@ -142,12 +145,12 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
-		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
+		return "", fmt.Errorf("%w: while parsing sha256 hash: %w", ateerrors.ReasonInvalidSandboxAsset, err)
 	}
 
 	tmpFile, err := os.CreateTemp(filepath.Dir(localPath), filepath.Base(localPath)+"-download-")
 	if err != nil {
-		return "", fmt.Errorf("while creating temp file: %w", err)
+		return "", wrapFileSystemErr("while creating temp file", err)
 	}
 	tmpName := tmpFile.Name()
 	defer os.Remove(tmpName) // partial-download cleanup; no-op after rename
@@ -158,23 +161,23 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	hasher := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(rc, maxAssetBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("while downloading %v: %w", entry.URL, err)
+		return "", wrapFileSystemErr(fmt.Sprintf("while downloading %v", entry.URL), err)
 	}
 	if n > maxAssetBytes {
-		return "", fmt.Errorf("asset %v exceeds %d-byte cap", entry.URL, maxAssetBytes)
+		return "", fmt.Errorf("%w: asset %v exceeds %d-byte cap", ateerrors.ReasonInvalidSandboxAsset, entry.URL, maxAssetBytes)
 	}
 	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
-		return "", fmt.Errorf("sha256 mismatch; got=%x want=%s", got, entry.SHA256)
+		return "", fmt.Errorf("%w: sha256 mismatch; got=%x want=%s", ateerrors.ReasonInvalidSandboxAsset, got, entry.SHA256)
 	}
 
 	if err := tmpFile.Chmod(0o755); err != nil {
-		return "", fmt.Errorf("while setting file mode: %w", err)
+		return "", wrapFileSystemErr("while setting file mode", err)
 	}
 	if err := tmpFile.Close(); err != nil { // flush before rename
-		return "", fmt.Errorf("while closing temp file: %w", err)
+		return "", wrapFileSystemErr("while closing temp file", err)
 	}
 	if err := os.Rename(tmpName, localPath); err != nil {
-		return "", fmt.Errorf("while renaming temp file to target: %w", err)
+		return "", wrapFileSystemErr("while renaming temp file to target", err)
 	}
 
 	return localPath, nil
@@ -206,14 +209,14 @@ func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser,
 func writeSandboxRecord(atespace, actorID string, rec *sandboxAssetsRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
-		return fmt.Errorf("while marshaling sandbox record: %w", err)
+		return wrapFileSystemErr("while marshaling sandbox record", err)
 	}
 	path := ateompath.ActorSandboxAssetsFile(atespace, actorID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("while creating actor dir: %w", err)
+		return wrapFileSystemErr("while creating actor dir", err)
 	}
 	if err := writeFileAtomic(path, data, 0o600); err != nil {
-		return fmt.Errorf("while writing sandbox record: %w", err)
+		return wrapFileSystemErr("while writing sandbox record", err)
 	}
 	return nil
 }
@@ -224,7 +227,7 @@ func readSandboxRecord(atespace, actorID string) (*sandboxAssetsRecord, error) {
 	path := ateompath.ActorSandboxAssetsFile(atespace, actorID)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("while reading sandbox record %s: %w", path, err)
+		return nil, wrapFileSystemErr("while reading sandbox record", err)
 	}
 	return unmarshalSandboxRecord(data)
 }
@@ -232,7 +235,32 @@ func readSandboxRecord(atespace, actorID string) (*sandboxAssetsRecord, error) {
 func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
-		return nil, fmt.Errorf("while parsing sandbox record/manifest: %w", err)
+		return nil, fmt.Errorf("%w: while parsing sandbox record/manifest: %w", ateerrors.ReasonInvalidSandboxAsset, err)
 	}
 	return rec, nil
+}
+
+func wrapFileSystemErr(msg string, err error) error {
+	if isTerminalFileSystemErr(err) {
+		return fmt.Errorf("%w: %s: %w", ateerrors.ReasonTerminalFileSystemError, msg, err)
+	}
+	return fmt.Errorf("%s: %w", msg, err)
+}
+
+func isTerminalFileSystemErr(err error) bool {
+	var terminalFileErrs = []error{
+		os.ErrNotExist,
+		os.ErrPermission,
+		syscall.EISDIR,
+		syscall.ENOTDIR,
+		syscall.ENAMETOOLONG,
+		syscall.ELOOP,
+		syscall.EROFS,
+	}
+	for _, target := range terminalFileErrs {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }

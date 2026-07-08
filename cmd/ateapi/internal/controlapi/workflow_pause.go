@@ -92,6 +92,7 @@ func (s *MarkPausingStep) Execute(ctx context.Context, input *PauseInput, state 
 func (s *MarkPausingStep) RetryBackoff() *wait.Backoff { return nil }
 
 type CallAteletPauseStep struct {
+	store  store.Interface
 	dialer *AteletDialer
 }
 
@@ -101,8 +102,11 @@ func (s *CallAteletPauseStep) IsComplete(ctx context.Context, input *PauseInput,
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED, nil
 }
 func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
-	if state.Actor.GetAteomPodNamespace() == "" {
-		return fmt.Errorf("actor is in PAUSING state but has no active worker")
+	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
+		if err := crashActor(ctx, s.store, state.Actor.Atespace, state.Actor.ActorId); err != nil {
+			slog.Error("Failed to crash actor", slog.String("err", err.Error()))
+		}
+		return fmt.Errorf("actor is CRASHED because it was in PAUSING state but has no active worker")
 	}
 
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
@@ -137,11 +141,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	}
 
 	_, err = client.Checkpoint(ctx, req)
-	if err != nil {
-		return fmt.Errorf("while checkpointing workload: %w", err)
-	}
-
-	return nil
+	return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while checkpointing workload")
 }
 
 func (s *CallAteletPauseStep) RetryBackoff() *wait.Backoff { return nil }

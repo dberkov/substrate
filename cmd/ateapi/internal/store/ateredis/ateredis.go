@@ -256,6 +256,14 @@ func (s *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	// caller via WorkerWatch.Close or when the parent ctx is cancelled.
 	watchCtx, cancel := context.WithCancel(ctx)
 	pubsub := s.rdb.Subscribe(watchCtx, workerPubSubChannel)
+	// Subscribe sends the SUBSCRIBE command asynchronously; wait for the
+	// confirmation reply so that events published after WatchWorkers returns
+	// are guaranteed to be delivered to this subscription.
+	if _, err := pubsub.Receive(watchCtx); err != nil {
+		pubsub.Close()
+		cancel()
+		return nil, fmt.Errorf("while confirming worker subscription: %w", err)
+	}
 	ch := make(chan store.WorkerEvent, 128)
 	go func() {
 		defer close(ch)
@@ -483,7 +491,8 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, id string) erro
 			return fmt.Errorf("in protojson.Unmarshal: %w", err)
 		}
 
-		if currentActor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		if currentActor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED &&
+			currentActor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 			return store.ErrFailedPrecondition
 		}
 
@@ -716,8 +725,12 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize 
 }
 
 func (s *Persistence) getSortedMasters(ctx context.Context) ([]*redis.Client, error) {
+	var mu sync.Mutex
 	var masters []*redis.Client
+	// ForEachMaster invokes the callback concurrently, one goroutine per master.
 	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
+		mu.Lock()
+		defer mu.Unlock()
 		masters = append(masters, master)
 		return nil
 	})

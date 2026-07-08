@@ -24,8 +24,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -267,8 +269,14 @@ func TestFetchAssetRejectsBadHash(t *testing.T) {
 	}
 
 	s := &AteomHerder{}
-	if _, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash}); err == nil {
-		t.Error("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
+	_, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash})
+	if err == nil {
+		t.Fatal("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
+	}
+	// The error must come from the validation step, proving it ran before the
+	// cache-hit stat could return the planted file.
+	if !strings.Contains(err.Error(), "while validating asset hash") {
+		t.Errorf("error did not come from hash validation: %v", err)
 	}
 }
 
@@ -317,8 +325,12 @@ func TestFetchAssetStreaming(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = 4 // content is longer than this
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}); err == nil {
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
+		}
+		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
+			t.Errorf("over-cap error not tagged terminal: %v", err)
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
@@ -330,11 +342,66 @@ func TestFetchAssetStreaming(t *testing.T) {
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash}); err == nil {
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash})
+		if err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
+		}
+		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
+			t.Errorf("hash-mismatch error not tagged terminal: %v", err)
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
+		}
+	})
+
+	t.Run("missing object is terminal", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		// The ategcs clients tag a missing object with ReasonFailedGetExternalObject.
+		notFound := fmt.Errorf("%w: no such object", ateerrors.ReasonFailedGetExternalObject)
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if !errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
+			t.Errorf("missing-object error not tagged terminal: %v", err)
+		}
+		if errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
+			t.Errorf("missing-object error wrongly tagged ReasonInvalidSandboxAsset: %v", err)
+		}
+		// The extracted (outermost) Reason drives CrashIfReason's ErrorInfo;
+		// it must be the client tag, not a fetchAsset blanket wrap.
+		if r, ok := errors.AsType[ateerrors.Reason](err); !ok || r != ateerrors.ReasonFailedGetExternalObject {
+			t.Errorf("extracted reason = %v (ok=%v), want ReasonFailedGetExternalObject", r, ok)
+		}
+	})
+
+	t.Run("malformed url is terminal", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open, which
+		// tags the failure with ReasonInvalidObjectURL.
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
+		if !errors.Is(err, ateerrors.ReasonInvalidObjectURL) {
+			t.Errorf("malformed-url error not tagged terminal: %v", err)
+		}
+	})
+
+	t.Run("network error stays untagged (retriable)", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if err == nil {
+			t.Fatal("fetchAsset accepted a failing open")
+		}
+		// A transient open failure must carry no Reason at all: any tag here
+		// is claimed by CrashIfReason in Checkpoint/Restore and would mark a
+		// recoverable actor CRASHED instead of letting the control plane retry.
+		if r, ok := errors.AsType[ateerrors.Reason](err); ok {
+			t.Errorf("network error wrongly tagged with reason %v: %v", r, err)
+		}
+		if !strings.Contains(err.Error(), "while fetching") {
+			t.Errorf("open failure lost its context wrap: %v", err)
 		}
 	})
 }
@@ -415,5 +482,34 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 	got := buildAteomWorkloadSpec(in)
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestIsTerminalFileErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"not exist", os.ErrNotExist, true},
+		{"permission", os.ErrPermission, true},
+		{"is a directory", syscall.EISDIR, true},
+		{"not a directory", syscall.ENOTDIR, true},
+		{"name too long", syscall.ENAMETOOLONG, true},
+		{"symlink loop", syscall.ELOOP, true},
+		{"read-only filesystem", syscall.EROFS, true},
+		{"wrapped not exist", fmt.Errorf("while reading: %w", os.ErrNotExist), true},
+		{"too many open files", syscall.EMFILE, false},
+		{"stale nfs handle", syscall.ESTALE, false},
+		{"try again", syscall.EAGAIN, false},
+		{"io error", syscall.EIO, false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTerminalFileSystemErr(tt.err); got != tt.want {
+				t.Errorf("isTerminalFileSystemErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
