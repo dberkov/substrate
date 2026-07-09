@@ -32,16 +32,16 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		return nil, err
 	}
 
-	if err := s.persistence.DeleteActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName()); err != nil {
+	if err := s.persistence.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorRef().GetName())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
-			actor, getErr := s.persistence.GetActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
+			actor, getErr := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", req.GetActorRef().GetName(), actor.GetStatus())
+				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", req.GetActor().GetName(), actor.GetStatus())
 			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", req.GetActorRef().GetName())
+			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", req.GetActor().GetName())
 		}
 		if errors.Is(err, store.ErrPersistenceRetry) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -56,10 +56,10 @@ func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
+		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
 	if len(errs) > 0 {

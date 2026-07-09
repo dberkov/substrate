@@ -42,18 +42,18 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	}
 
 	// The atespace must already exist.
-	exists, err := s.persistence.AtespaceExists(ctx, req.GetActorRef().GetAtespace())
+	exists, err := s.persistence.AtespaceExists(ctx, req.GetActor().GetAtespace())
 	if err != nil {
 		return nil, fmt.Errorf("while checking atespace: %w", err)
 	}
 	if !exists {
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", req.GetActorRef().GetAtespace())
+		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", req.GetActor().GetAtespace())
 	}
 
-	name := req.GetActorRef().GetName()
+	name := req.GetActor().GetName()
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: req.GetActorRef().GetAtespace(),
+			Atespace: req.GetActor().GetAtespace(),
 			Name:     name,
 		},
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -94,10 +94,10 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 		}
 	}
 
-	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
+		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
 	if val := req.WorkerSelector; val != nil {

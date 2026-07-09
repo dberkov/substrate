@@ -38,10 +38,9 @@ func ValidateResourceName(name string, fldPath *field.Path) field.ErrorList {
 	return errs
 }
 
-// ValidateActorRef checks that the actor reference is well-formed and that
-// each of its components is a valid resource name. It does not check that the
-// referenced actor actually exists.
-func ValidateActorRef(ref *ateapipb.ActorRef, fldPath *field.Path) field.ErrorList {
+// ValidateObjectRef checks that the object reference is well-formed and that
+// each of its components is a valid resource name.
+func ValidateObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
 	if ref == nil {
 		return nil
 	}

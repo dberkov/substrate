@@ -52,7 +52,7 @@ var getActorsCmd = &cobra.Command{
 			if getActorsAtespaceFlag == "" {
 				return fmt.Errorf("--atespace is required when getting a specific actor")
 			}
-			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: getActorsAtespaceFlag, Name: args[0]}})
+			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: args[0]}})
 			if err != nil {
 				return fmt.Errorf("failed to get actor: %w", err)
 			}

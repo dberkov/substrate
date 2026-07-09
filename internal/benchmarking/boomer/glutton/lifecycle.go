@@ -175,8 +175,8 @@ type gluttonUser struct {
 	actorRunning bool
 }
 
-func (u *gluttonUser) ref() *ateapipb.ActorRef {
-	return &ateapipb.ActorRef{Atespace: u.cfg.Atespace, Name: u.actorID}
+func (u *gluttonUser) ref() *ateapipb.ObjectRef {
+	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorID}
 }
 
 // ensureAtespace creates the configured atespace, swallowing AlreadyExists
@@ -201,7 +201,7 @@ func (u *gluttonUser) ensureAtespace(ctx context.Context) error {
 func (u *gluttonUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			ActorRef:               u.ref(),
+			Actor:                  u.ref(),
 			ActorTemplateNamespace: templateNS,
 			ActorTemplateName:      templateName,
 		}, grpc.Trailer(tr))
@@ -216,8 +216,8 @@ func (u *gluttonUser) resume(ctx context.Context) bool {
 	}
 	err := u.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
-			ActorRef: u.ref(),
-			Boot:     u.firstResume,
+			Actor: u.ref(),
+			Boot:  u.firstResume,
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -232,7 +232,7 @@ func (u *gluttonUser) resume(ctx context.Context) bool {
 func (u *gluttonUser) suspend(ctx context.Context) {
 	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
-			ActorRef: u.ref(),
+			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -242,7 +242,7 @@ func (u *gluttonUser) suspend(ctx context.Context) {
 func (u *gluttonUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			ActorRef: u.ref(),
+			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})

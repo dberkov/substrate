@@ -31,9 +31,9 @@ func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (
 	if err := validateGetActorRequest(req); err != nil {
 		return nil, err
 	}
-	actor, err := s.persistence.GetActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
+	actor, err := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorRef().GetName())
+		return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
 	} else if err != nil {
 		return nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
@@ -46,10 +46,10 @@ func validateGetActorRequest(req *ateapipb.GetActorRequest) error {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
+		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
 	if len(errs) > 0 {

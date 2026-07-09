@@ -611,29 +611,32 @@ func (x *Atespace) GetMetadata() *ResourceMetadata {
 	return nil
 }
 
-// ActorRef identifies an actor: a name is only unique within its atespace.
-type ActorRef struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Atespace      string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+// ObjectRef references a Substrate resource by its (atespace, name) identity.
+type ObjectRef struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The atespace where the resource lives. Empty if the resource is global-scoped.
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// The name of the resource. Required. Unique within an atespace, or globally
+	// unique if the resource is global-scoped.
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ActorRef) Reset() {
-	*x = ActorRef{}
+func (x *ObjectRef) Reset() {
+	*x = ObjectRef{}
 	mi := &file_ateapi_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActorRef) String() string {
+func (x *ObjectRef) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActorRef) ProtoMessage() {}
+func (*ObjectRef) ProtoMessage() {}
 
-func (x *ActorRef) ProtoReflect() protoreflect.Message {
+func (x *ObjectRef) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -645,19 +648,19 @@ func (x *ActorRef) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActorRef.ProtoReflect.Descriptor instead.
-func (*ActorRef) Descriptor() ([]byte, []int) {
+// Deprecated: Use ObjectRef.ProtoReflect.Descriptor instead.
+func (*ObjectRef) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *ActorRef) GetAtespace() string {
+func (x *ObjectRef) GetAtespace() string {
 	if x != nil {
 		return x.Atespace
 	}
 	return ""
 }
 
-func (x *ActorRef) GetName() string {
+func (x *ObjectRef) GetName() string {
 	if x != nil {
 		return x.Name
 	}
@@ -1002,7 +1005,7 @@ func (*DeleteAtespaceResponse) Descriptor() ([]byte, []int) {
 
 type GetActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
+	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1037,9 +1040,9 @@ func (*GetActorRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *GetActorRequest) GetActorRef() *ActorRef {
+func (x *GetActorRequest) GetActor() *ObjectRef {
 	if x != nil {
-		return x.ActorRef
+		return x.Actor
 	}
 	return nil
 }
@@ -1092,7 +1095,7 @@ func (x *GetActorResponse) GetActor() *Actor {
 type CreateActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The new actor's atespace and actor_id (actor_id must be a valid DNS-1123 label).
-	ActorRef *ActorRef `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
+	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// The namespace of the ActorTemplate to derive from.
 	ActorTemplateNamespace string `protobuf:"bytes,2,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	// The name of the ActorTemplate to derive from.
@@ -1134,9 +1137,9 @@ func (*CreateActorRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{18}
 }
 
-func (x *CreateActorRequest) GetActorRef() *ActorRef {
+func (x *CreateActorRequest) GetActor() *ObjectRef {
 	if x != nil {
-		return x.ActorRef
+		return x.Actor
 	}
 	return nil
 }
@@ -1210,8 +1213,8 @@ func (x *CreateActorResponse) GetActor() *Actor {
 // May be called regardless of the actor's current status.
 // Changes take effect on the next ResumeActor call.
 type UpdateActorRequest struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	ActorRef *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Actor *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// worker_selector replaces the actor's current placement constraint.
 	// Takes effect on the next ResumeActor call.
 	WorkerSelector *Selector `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
@@ -1249,9 +1252,9 @@ func (*UpdateActorRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{20}
 }
 
-func (x *UpdateActorRequest) GetActorRef() *ActorRef {
+func (x *UpdateActorRequest) GetActor() *ObjectRef {
 	if x != nil {
-		return x.ActorRef
+		return x.Actor
 	}
 	return nil
 }
@@ -1309,7 +1312,7 @@ func (x *UpdateActorResponse) GetActor() *Actor {
 
 type SuspendActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
+	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1344,9 +1347,9 @@ func (*SuspendActorRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *SuspendActorRequest) GetActorRef() *ActorRef {
+func (x *SuspendActorRequest) GetActor() *ObjectRef {
 	if x != nil {
-		return x.ActorRef
+		return x.Actor
 	}
 	return nil
 }
@@ -1397,7 +1400,7 @@ func (x *SuspendActorResponse) GetActor() *Actor {
 
 type PauseActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
+	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1432,9 +1435,9 @@ func (*PauseActorRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{24}
 }
 
-func (x *PauseActorRequest) GetActorRef() *ActorRef {
+func (x *PauseActorRequest) GetActor() *ObjectRef {
 	if x != nil {
-		return x.ActorRef
+		return x.Actor
 	}
 	return nil
 }
@@ -1484,8 +1487,8 @@ func (x *PauseActorResponse) GetActor() *Actor {
 }
 
 type ResumeActorRequest struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	ActorRef *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Actor *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// If true, skip golden snapshot and boot the workload from scratch.
 	Boot          bool `protobuf:"varint,2,opt,name=boot,proto3" json:"boot,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1522,9 +1525,9 @@ func (*ResumeActorRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{26}
 }
 
-func (x *ResumeActorRequest) GetActorRef() *ActorRef {
+func (x *ResumeActorRequest) GetActor() *ObjectRef {
 	if x != nil {
-		return x.ActorRef
+		return x.Actor
 	}
 	return nil
 }
@@ -1582,7 +1585,7 @@ func (x *ResumeActorResponse) GetActor() *Actor {
 
 type DeleteActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
+	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1617,9 +1620,9 @@ func (*DeleteActorRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{28}
 }
 
-func (x *DeleteActorRequest) GetActorRef() *ActorRef {
+func (x *DeleteActorRequest) GetActor() *ObjectRef {
 	if x != nil {
-		return x.ActorRef
+		return x.Actor
 	}
 	return nil
 }
@@ -1983,7 +1986,7 @@ func (x *Worker) GetLabels() map[string]string {
 type Assignment struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	ActorTemplate *KubeNamespacedObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
-	Actor         *ActorRef                `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
+	Actor         *ObjectRef               `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2025,7 +2028,7 @@ func (x *Assignment) GetActorTemplate() *KubeNamespacedObjectRef {
 	return nil
 }
 
-func (x *Assignment) GetActor() *ActorRef {
+func (x *Assignment) GetActor() *ObjectRef {
 	if x != nil {
 		return x.Actor
 	}
@@ -2459,8 +2462,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rSTATUS_PAUSED\x10\x06\x12\x12\n" +
 	"\x0eSTATUS_CRASHED\x10\a\"@\n" +
 	"\bAtespace\x124\n" +
-	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\":\n" +
-	"\bActorRef\x12\x1a\n" +
+	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\";\n" +
+	"\tObjectRef\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"+\n" +
 	"\x15CreateAtespaceRequest\x12\x12\n" +
@@ -2476,38 +2479,38 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tatespaces\x18\x01 \x03(\v2\x10.ateapi.AtespaceR\tatespaces\"+\n" +
 	"\x15DeleteAtespaceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x18\n" +
-	"\x16DeleteAtespaceResponse\"@\n" +
-	"\x0fGetActorRequest\x12-\n" +
-	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\"7\n" +
+	"\x16DeleteAtespaceResponse\":\n" +
+	"\x0fGetActorRequest\x12'\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"7\n" +
 	"\x10GetActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"\xe8\x01\n" +
-	"\x12CreateActorRequest\x12-\n" +
-	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\x128\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"\xe2\x01\n" +
+	"\x12CreateActorRequest\x12'\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x128\n" +
 	"\x18actor_template_namespace\x18\x02 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x03 \x01(\tR\x11actorTemplateName\x129\n" +
 	"\x0fworker_selector\x18\x04 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\":\n" +
 	"\x13CreateActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"~\n" +
-	"\x12UpdateActorRequest\x12-\n" +
-	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\x129\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"x\n" +
+	"\x12UpdateActorRequest\x12'\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x129\n" +
 	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\":\n" +
 	"\x13UpdateActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"D\n" +
-	"\x13SuspendActorRequest\x12-\n" +
-	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\";\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\">\n" +
+	"\x13SuspendActorRequest\x12'\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\";\n" +
 	"\x14SuspendActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"B\n" +
-	"\x11PauseActorRequest\x12-\n" +
-	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\"9\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"<\n" +
+	"\x11PauseActorRequest\x12'\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"9\n" +
 	"\x12PauseActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"W\n" +
-	"\x12ResumeActorRequest\x12-\n" +
-	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\x12\x12\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"Q\n" +
+	"\x12ResumeActorRequest\x12'\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x12\n" +
 	"\x04boot\x18\x02 \x01(\bR\x04boot\":\n" +
 	"\x13ResumeActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"C\n" +
-	"\x12DeleteActorRequest\x12-\n" +
-	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\"\x15\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"=\n" +
+	"\x12DeleteActorRequest\x12'\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"\x15\n" +
 	"\x13DeleteActorResponse\"\x14\n" +
 	"\x12ListWorkersRequest\"?\n" +
 	"\x13ListWorkersResponse\x12(\n" +
@@ -2538,11 +2541,11 @@ const file_ateapi_proto_rawDesc = "" +
 	" \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"|\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"}\n" +
 	"\n" +
 	"Assignment\x12F\n" +
-	"\x0eactor_template\x18\x01 \x01(\v2\x1f.ateapi.KubeNamespacedObjectRefR\ractorTemplate\x12&\n" +
-	"\x05actor\x18\x02 \x01(\v2\x10.ateapi.ActorRefR\x05actor\"K\n" +
+	"\x0eactor_template\x18\x01 \x01(\v2\x1f.ateapi.KubeNamespacedObjectRefR\ractorTemplate\x12'\n" +
+	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"K\n" +
 	"\x17KubeNamespacedObjectRef\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\x13\n" +
@@ -2610,7 +2613,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*ResourceMetadata)(nil),        // 5: ateapi.ResourceMetadata
 	(*Actor)(nil),                   // 6: ateapi.Actor
 	(*Atespace)(nil),                // 7: ateapi.Atespace
-	(*ActorRef)(nil),                // 8: ateapi.ActorRef
+	(*ObjectRef)(nil),               // 8: ateapi.ObjectRef
 	(*CreateAtespaceRequest)(nil),   // 9: ateapi.CreateAtespaceRequest
 	(*CreateAtespaceResponse)(nil),  // 10: ateapi.CreateAtespaceResponse
 	(*GetAtespaceRequest)(nil),      // 11: ateapi.GetAtespaceRequest
@@ -2664,27 +2667,27 @@ var file_ateapi_proto_depIdxs = []int32{
 	7,  // 10: ateapi.CreateAtespaceResponse.atespace:type_name -> ateapi.Atespace
 	7,  // 11: ateapi.GetAtespaceResponse.atespace:type_name -> ateapi.Atespace
 	7,  // 12: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
-	8,  // 13: ateapi.GetActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	8,  // 13: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
 	6,  // 14: ateapi.GetActorResponse.actor:type_name -> ateapi.Actor
-	8,  // 15: ateapi.CreateActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	8,  // 15: ateapi.CreateActorRequest.actor:type_name -> ateapi.ObjectRef
 	4,  // 16: ateapi.CreateActorRequest.worker_selector:type_name -> ateapi.Selector
 	6,  // 17: ateapi.CreateActorResponse.actor:type_name -> ateapi.Actor
-	8,  // 18: ateapi.UpdateActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	8,  // 18: ateapi.UpdateActorRequest.actor:type_name -> ateapi.ObjectRef
 	4,  // 19: ateapi.UpdateActorRequest.worker_selector:type_name -> ateapi.Selector
 	6,  // 20: ateapi.UpdateActorResponse.actor:type_name -> ateapi.Actor
-	8,  // 21: ateapi.SuspendActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	8,  // 21: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
 	6,  // 22: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
-	8,  // 23: ateapi.PauseActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	8,  // 23: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
 	6,  // 24: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
-	8,  // 25: ateapi.ResumeActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	8,  // 25: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
 	6,  // 26: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
-	8,  // 27: ateapi.DeleteActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	8,  // 27: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
 	35, // 28: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
 	6,  // 29: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
 	36, // 30: ateapi.Worker.assignment:type_name -> ateapi.Assignment
 	45, // 31: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
 	37, // 32: ateapi.Assignment.actor_template:type_name -> ateapi.KubeNamespacedObjectRef
-	8,  // 33: ateapi.Assignment.actor:type_name -> ateapi.ActorRef
+	8,  // 33: ateapi.Assignment.actor:type_name -> ateapi.ObjectRef
 	17, // 34: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
 	19, // 35: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
 	21, // 36: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
