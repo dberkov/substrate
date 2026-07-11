@@ -97,13 +97,16 @@ func (c *Cache) Ensure(ctx context.Context, ref string) (digest, lowerDir string
 	lowerDir = filepath.Join(entryDir, "rootfs")
 	readyMarker := filepath.Join(entryDir, ".ready")
 
-	// Fast path: already extracted and marked ready.
+	// Fast path: already extracted, marked ready, and the sidecar
+	// config is present. Entries produced by older atelet versions
+	// lack the config sidecar; treat those as invalidated and fall
+	// through to re-extract.
 	if _, statErr := os.Stat(readyMarker); statErr == nil {
-		cfg, cfgErr := readImageCfg(entryDir)
-		if cfgErr != nil {
+		if cfg, cfgErr := readImageCfg(entryDir); cfgErr == nil {
+			return digest, lowerDir, cfg, nil
+		} else if !os.IsNotExist(cfgErr) {
 			return "", "", nil, fmt.Errorf("while reading cached image config for %q: %w", ref, cfgErr)
 		}
-		return digest, lowerDir, cfg, nil
 	}
 
 	// Slow path: extract under singleflight so parallel actor starts
@@ -111,9 +114,11 @@ func (c *Cache) Ensure(ctx context.Context, ref string) (digest, lowerDir string
 	_, err, _ = c.inflight.Do(digest, func() (any, error) {
 		// Re-check inside the singleflight critical section in case
 		// another goroutine populated the cache while we were
-		// queued.
+		// queued. Same missing-sidecar handling as the fast path.
 		if _, statErr := os.Stat(readyMarker); statErr == nil {
-			return nil, nil
+			if _, cfgErr := readImageCfg(entryDir); cfgErr == nil {
+				return nil, nil
+			}
 		}
 		return nil, c.extractLocked(ctx, ref, digest)
 	})
