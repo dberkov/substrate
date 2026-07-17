@@ -21,12 +21,17 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+	tracer := otel.Tracer("service")
+	ctx, span := tracer.Start(ctx, "Service.ResumeActor")
+	defer span.End()
+
 	if err := validateResumeActorRequest(req); err != nil {
 		return nil, err
 	}

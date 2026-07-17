@@ -830,7 +830,14 @@ func (s *Persistence) fetchActors(ctx context.Context, master *redis.Client, key
 }
 
 func (s *Persistence) AcquireLock(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {
+	_, span := tracer.Start(ctx, "redis.acquire_lock")
+	span.SetAttributes(attribute.String("key", key))
+	start := time.Now()
 	ok, err := s.rdb.SetNX(ctx, key, value, ttl).Result()
+	elapsed := time.Since(start)
+	span.SetAttributes(attribute.Int64("elapsed_ms", elapsed.Milliseconds()))
+	span.End()
+	logSlowLockOp(ctx, "acquire_lock", key, elapsed, err)
 	if err != nil {
 		return false, fmt.Errorf("while acquiring lock for %q: %w", key, err)
 	}
@@ -838,19 +845,43 @@ func (s *Persistence) AcquireLock(ctx context.Context, key string, value string,
 }
 
 func (s *Persistence) ReleaseLock(ctx context.Context, key string, value string) error {
-	var luaRelease = redis.NewScript(`
-		if redis.call("get", KEYS[1]) == ARGV[1] then
-			return redis.call("del", KEYS[1])
-		else
-			return 0
-		end
-	`)
-
+	_, span := tracer.Start(ctx, "redis.release_lock")
+	span.SetAttributes(attribute.String("key", key))
+	start := time.Now()
 	_, err := luaRelease.Run(ctx, s.rdb, []string{key}, value).Result()
+	elapsed := time.Since(start)
+	span.SetAttributes(attribute.Int64("elapsed_ms", elapsed.Milliseconds()))
+	span.End()
+	logSlowLockOp(ctx, "release_lock", key, elapsed, err)
 	if err != nil {
 		return fmt.Errorf("while releasing lock for %q with value %q: %w", key, value, err)
 	}
 	return nil
+}
+
+var luaRelease = redis.NewScript(`
+	if redis.call("get", KEYS[1]) == ARGV[1] then
+		return redis.call("del", KEYS[1])
+	else
+		return 0
+	end
+`)
+
+// slowLockThreshold is the elapsed time above which we log a lock op. Locks
+// should be sub-millisecond in the happy path; anything above this is worth
+// surfacing so we can correlate with shard/pool contention.
+const slowLockThreshold = 20 * time.Millisecond
+
+func logSlowLockOp(ctx context.Context, op, key string, elapsed time.Duration, err error) {
+	if elapsed < slowLockThreshold && err == nil {
+		return
+	}
+	slog.WarnContext(ctx, "slow redis lock op",
+		slog.String("op", op),
+		slog.String("key", key),
+		slog.Duration("elapsed", elapsed),
+		slog.Any("err", err),
+	)
 }
 
 func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {

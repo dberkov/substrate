@@ -149,6 +149,10 @@ func NewActorWorkflow(
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent.
 func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, boot bool) (*ateapipb.Actor, error) {
+	tracer := otel.Tracer("workflow")
+	ctx, span := tracer.Start(ctx, "ActorWorkflow.ResumeActor")
+	defer span.End()
+
 	input := &ResumeInput{
 		ActorName: name,
 		Atespace:  atespace,
@@ -156,24 +160,34 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, 
 	}
 	state := &ResumeState{}
 
+	_, acquireActorLockSpan := tracer.Start(ctx, "acquireActorLock")
 	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 90 seconds, with 2 seconds padding for workflow timeout
-	ctx, releaseLock, err := w.acquireActorLock(ctx, atespace, name, 90*time.Second, 2*time.Second)
+	// Lock TTL is 180 seconds, with 2 seconds padding for workflow timeout
+	ctx, releaseLock, err := w.acquireActorLock(ctx, atespace, name, 180*time.Second, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	defer releaseLock()
+	defer func() {
+		_, releaseLockSpan := tracer.Start(ctx, "releaseLock")
+		releaseLock()
+		releaseLockSpan.End()
+	}()
+	acquireActorLockSpan.End()
 
+	_, initStepsSpan := tracer.Start(ctx, "initSteps")
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&AssignWorkerStep{store: w.store, workerCache: w.workerCache},
 		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
 		&FinalizeRunningStep{store: w.store},
 	}
+	initStepsSpan.End()
 
+	ctx, runWorkflowSpan := tracer.Start(ctx, "runWorkflow")
 	if err := RunWorkflow(ctx, input, state, steps); err != nil {
 		return nil, err
 	}
+	runWorkflowSpan.End()
 
 	return state.Actor, nil
 }
