@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -202,7 +203,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		actorUID: req.GetActorUid(),
 	}
 
-	// Create and start pause container
+	// Create and start pause container. The bundle rootfs is composed here —
+	// an overlay of the node's cached image layers plus the bundle's private
+	// upper — because mounting is ateom's job (atelet runs with no
+	// capabilities); runsc's gofer resolves the mount in this pod's mount
+	// namespace.
+	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	}
 	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
@@ -218,6 +226,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
+		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
+			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
+		}
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
@@ -288,6 +299,16 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		slog.WarnContext(ctx, "Failed to clean up runsc containers after checkpoint",
 			"actorName", req.GetActorName(),
 			"atespace", req.GetAtespace(),
+			"actorUID", req.GetActorUid(),
+			"err", err)
+	}
+
+	// Detach the overlay rootfs mounts before atelet wipes the bundle dirs
+	// (deleting a bundle out from under a live mount in this namespace would
+	// leave the mount orphaned until the pod restarts). Best-effort, same as
+	// the container cleanup above.
+	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
+		slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after checkpoint",
 			"actorUID", req.GetActorUid(),
 			"err", err)
 	}
@@ -377,6 +398,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
 
+	// Compose the pause rootfs before create (see RunWorkload). runsc restore
+	// only needs the rootfs to hold the correct content; whether it came from
+	// an untar or an overlay of cached layers is transparent to it.
+	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	}
+
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// Create and restore pause container
@@ -406,6 +434,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
+		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
+			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
+		}
 		switch req.GetScope() {
 		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
