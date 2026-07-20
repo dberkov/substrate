@@ -76,6 +76,7 @@ go run ./tools/validate-image-cache \
 | `--parallel` | 3 | images validated concurrently (each pulls up to 4 layers in parallel) |
 | `--timeout` | 20m | per-image timeout |
 | `--min-free-gb` | 150 | evict oldest idle layers below this free-space floor |
+| `--evict-idle` | 10m | only evict layers idle at least this long; must be far below disk-fill time on small disks |
 | `--platform` | `linux/amd64` | image platform to pull |
 
 ## Output and rerunning
@@ -88,8 +89,10 @@ non-zero if any image failed.
 Reruns are cheap by design: completed layers stay in the cache (and even an
 interrupted pull keeps every layer that finished), so re-running the same
 sample — or just the failed refs — mostly re-validates from local disk.
-Eviction only removes layers idle for 30+ minutes, so in-flight images are
-never raced.
+Eviction only removes layers idle for at least `--evict-idle`, so in-flight
+images are not raced; on a small disk with high throughput, set it well
+below the time the corpus needs to fill the disk, or nothing will be
+evictable while it fills.
 
 ## Scaling out
 

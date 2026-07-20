@@ -62,6 +62,7 @@ var (
 	parallel  = flag.Int("parallel", 3, "Images validated concurrently (each pulls up to 4 layers in parallel)")
 	timeout   = flag.Duration("timeout", 20*time.Minute, "Per-image timeout")
 	minFreeGB = flag.Uint64("min-free-gb", 150, "Evict oldest idle cached layers when the cache volume has less free space than this")
+	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Only evict layers idle for at least this long (must exceed the time any in-flight image needs a just-unpacked layer; small disks + high throughput need small values)")
 	platform  = flag.String("platform", "linux/amd64", "Image platform to pull")
 )
 
@@ -203,9 +204,11 @@ func shortRef(ref string) string {
 }
 
 // evictIfLow deletes the oldest cached layer trees until the cache volume
-// has at least minFree bytes available. Layers touched within the last 30
-// minutes are skipped so an in-flight image's freshly unpacked layers are
-// never raced (per-image timeout is shorter than that).
+// has at least minFree bytes available. Layers touched within the last
+// --evict-idle are skipped so an in-flight image's freshly unpacked layers
+// are not raced away mid-validation. NOTE: if the corpus unpacks faster
+// than the idle window elapses on a small disk, nothing is evictable while
+// the disk fills — size --evict-idle well below disk-fill time.
 var evictMu sync.Mutex
 
 func evictIfLow(cacheRoot string, minFree uint64) {
@@ -227,7 +230,7 @@ func evictIfLow(cacheRoot string, minFree uint64) {
 	var candidates []aged
 	for _, e := range entries {
 		info, err := e.Info()
-		if err != nil || time.Since(info.ModTime()) < 30*time.Minute {
+		if err != nil || time.Since(info.ModTime()) < *evictIdle {
 			continue
 		}
 		candidates = append(candidates, aged{filepath.Join(layersDir, e.Name()), info.ModTime()})
