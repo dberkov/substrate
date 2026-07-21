@@ -228,6 +228,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
 				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
 			}
+			// Detach any bundle rootfs overlays mounted by buildActorContainers
+			// before the failure, mirroring teardownActor's cleanup.
+			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure", slog.Any("err", err))
+			}
 		}
 	}()
 
