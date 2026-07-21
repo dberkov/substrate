@@ -194,6 +194,15 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 	defer func() {
 		if retErr != nil {
+			// Detach any bundle rootfs overlays a partially-completed setup
+			// mounted, mirroring the post-checkpoint cleanup — otherwise they
+			// linger in this namespace until atelet wipes the bundle dirs.
+			// Run before the network cleanup, which exits the process on
+			// failure and would skip this.
+			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
+				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
+					"actorUID", req.GetActorUid(), "err", err)
+			}
 			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after Run failure")
 		}
 	}()
@@ -387,6 +396,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 	defer func() {
 		if retErr != nil {
+			// Same overlay detach as the Run-failure path above.
+			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
+				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
+					"actorUID", req.GetActorUid(), "err", err)
+			}
 			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after Restore failure")
 		}
 	}()
