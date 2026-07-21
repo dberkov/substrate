@@ -192,9 +192,10 @@ func (s *Store) recordPath(digest v1.Hash) string {
 	return filepath.Join(s.root, "manifests", digest.Algorithm, digest.Hex+".json")
 }
 
-// sweepTempDirs removes unpack temp dirs orphaned by a crash. A layer dir
-// without the temp prefix is always complete (it was moved into place with a
-// single rename), so this is the only recovery the pool needs.
+// sweepTempDirs removes unpack temp dirs and manifest-record temp files
+// orphaned by a crash. A layer dir without the temp prefix and a record
+// without a leading dot are always complete (both are moved into place with
+// a single rename), so this is the only recovery the pool needs.
 func (s *Store) sweepTempDirs() error {
 	entries, err := os.ReadDir(s.layersDir())
 	if err != nil {
@@ -207,6 +208,22 @@ func (s *Store) sweepTempDirs() error {
 		p := filepath.Join(s.layersDir(), e.Name())
 		if err := RemoveAllWritable(p); err != nil {
 			return fmt.Errorf("while sweeping orphaned layer temp dir %q: %w", p, err)
+		}
+	}
+
+	// writeRecord's temp files are ".<hex>.json.tmp-<rand>"; finished records
+	// are "<hex>.json", so a leading dot alone identifies an orphan.
+	records, err := os.ReadDir(s.manifestsDir())
+	if err != nil {
+		return fmt.Errorf("while listing manifest records: %w", err)
+	}
+	for _, e := range records {
+		if !strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		p := filepath.Join(s.manifestsDir(), e.Name())
+		if err := os.Remove(p); err != nil {
+			return fmt.Errorf("while sweeping orphaned manifest temp file %q: %w", p, err)
 		}
 	}
 	return nil

@@ -219,11 +219,25 @@ func TestNew_RecoveryAndVersioning(t *testing.T) {
 	if err := os.MkdirAll(orphan, 0o700); err != nil {
 		t.Fatalf("planting orphan: %v", err)
 	}
+	recOrphan := filepath.Join(s.manifestsDir(), ".deadbeef.json.tmp-456")
+	if err := os.WriteFile(recOrphan, []byte("{"), 0o600); err != nil {
+		t.Fatalf("planting record orphan: %v", err)
+	}
+	record := filepath.Join(s.manifestsDir(), "deadbeef.json")
+	if err := os.WriteFile(record, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("planting record: %v", err)
+	}
 	if _, err := New(root); err != nil {
 		t.Fatalf("New(recovery): %v", err)
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Errorf("orphaned temp dir survived recovery")
+	}
+	if _, err := os.Stat(recOrphan); !os.IsNotExist(err) {
+		t.Errorf("orphaned manifest temp file survived recovery")
+	}
+	if _, err := os.Stat(record); err != nil {
+		t.Errorf("completed manifest record swept by recovery: %v", err)
 	}
 
 	if err := os.WriteFile(filepath.Join(root, versionFileName), []byte("99\n"), 0o600); err != nil {
