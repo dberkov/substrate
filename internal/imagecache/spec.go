@@ -37,6 +37,11 @@ const OverlaySpecFileName = "rootfs-overlay.json"
 // bundle path by the consumer rather than trusted from the file.
 type OverlaySpec struct {
 	Version int `json:"version"`
+	// Streaming, when non-empty, is a PoC signal (atelet --image-streaming-poc):
+	// the bundle rootfs should be composed by streaming this image ref through
+	// the node's containerd gcfs snapshotter rather than from the cached Layers.
+	// When set, Layers is empty. See streaming_linux.go.
+	Streaming string `json:"streaming,omitempty"`
 	// Layers are the cached layer directories (each holding its tree under
 	// fs/), bottom-most layer first — the order the image manifest lists
 	// them. Consumers reverse this into overlayfs's top-first lowerdir.

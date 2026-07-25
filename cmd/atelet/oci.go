@@ -77,6 +77,36 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		}
 	}
 
+	// PoC: instead of pulling+unpacking into the layer pool, hand the ref to
+	// ateom to stream through the node's gcfs snapshotter. atelet never
+	// touches image content, so argv must come from the ActorTemplate
+	// command/args (no image config to consult here).
+	if imageStreamingPoC != nil && *imageStreamingPoC {
+		resolvedArgs, err := resolveProcessArgs(nil, command, args)
+		if err != nil {
+			return fmt.Errorf("streaming PoC requires ActorTemplate command for %q: %w", containerName, err)
+		}
+		var extraDirs []string
+		if identityDir != "" {
+			extraDirs = append(extraDirs, IdentityMountPath)
+		}
+		if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
+			Streaming: ref,
+			ExtraDirs: extraDirs,
+		}); err != nil {
+			return fmt.Errorf("while writing streaming spec: %w", err)
+		}
+		ociSpec := buildActorOCISpec(actorUID, resolvedArgs, resolveActorEnv(nil, env), annotations, netns, identityDir, durableDirVolumeMounts)
+		ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
+		if err != nil {
+			return fmt.Errorf("while marshaling OCI spec: %w", err)
+		}
+		if err := os.WriteFile(path.Join(bundlePath, "config.json"), ociSpecBytes, 0o600); err != nil {
+			return fmt.Errorf("while writing OCI spec: %w", err)
+		}
+		return nil
+	}
+
 	img, err := imageCache.EnsureImage(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("in imageCache.EnsureImage: %w", err)

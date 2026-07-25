@@ -20,6 +20,7 @@
 package imagecache
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -48,6 +49,18 @@ func SetupBundleRootfs(bundlePath string) error {
 	}
 	if spec == nil {
 		return nil
+	}
+
+	// PoC: stream the rootfs through the node's gcfs snapshotter instead of
+	// composing it from cached layers. See streaming_linux.go.
+	if spec.Streaming != "" {
+		rootfs := filepath.Join(bundlePath, "rootfs")
+		if err := os.MkdirAll(rootfs, 0o755); err != nil {
+			return fmt.Errorf("while creating %q: %w", rootfs, err)
+		}
+		_ = unix.Unmount(rootfs, unix.MNT_DETACH)
+		return setupStreamingRootfs(context.Background(), spec.Streaming, rootfs,
+			streamingSnapKey(bundlePath), spec.ExtraDirs, metadataToken)
 	}
 
 	for _, layerDir := range spec.Layers {

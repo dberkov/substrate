@@ -53,3 +53,7 @@ Thumbs.db
 
 # Stray local build outputs (go build ./tools/... without -o)
 /validate-image-cache
+
+# Stray go build outputs at repo root
+/ateom-gvisor
+/build-large-image

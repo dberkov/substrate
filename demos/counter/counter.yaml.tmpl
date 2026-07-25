@@ -42,6 +42,11 @@ spec:
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
+    # Explicit command (matches the image's ko entrypoint, so a no-op for the
+    # normal pull+unpack path) — required when atelet runs with
+    # --image-streaming-poc, which composes the rootfs without reading the
+    # image config and so cannot derive the entrypoint.
+    command: ["/ko-app/counter"]
     readyz:
       httpGet:
         path: /readyz

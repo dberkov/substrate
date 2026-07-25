@@ -1,0 +1,82 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Image-streaming (Riptide/GCFS) PoC demo. Same stateful counter app as the
+# counter demo, but built by ko onto a large base image (see
+# baseImageOverrides for demos/streaming/counterheavy in .ko.yaml) so there is
+# a heavy rootfs that is STREAMED through the node's gcfs snapshotter at resume
+# instead of pulled and unpacked. Requires:
+#   * image streaming enabled on the node pool the workers run on
+#   * atelet started with --image-streaming-poc=true
+#   * registry read for the ate-demo-streaming/default workload identity
+# See demos/streaming/README.md.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-streaming
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: streaming
+  namespace: ate-demo-streaming
+  labels:
+    workload: streaming
+spec:
+  replicas: 2
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  sandboxClass: gvisor
+  # Only needed if image streaming is enabled on a *subset* of nodes: label
+  # those nodes and uncomment this to pin workers to them. Not needed when
+  # streaming is on every node the pool schedules to.
+  #template:
+  #  nodeSelector:
+  #    cloud.google.com/gke-image-streaming: "true"
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: counter-heavy
+  namespace: ate-demo-streaming
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: counter
+    # ko builds the counter server onto the large base from .ko.yaml and pins
+    # the digest (ActorTemplate rule). command MUST be set explicitly because
+    # the streaming path pulls no image config to derive the entrypoint from.
+    image: ko://github.com/agent-substrate/substrate/demos/streaming/counterheavy
+    command: ["/ko-app/counterheavy"]
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /home/counter
+  workerSelector:
+    matchLabels:
+      workload: streaming
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Data
+    location: gs://${BUCKET_NAME}/ate-demo-streaming/
+  volumes:
+  - name: data
+    durableDir: {}

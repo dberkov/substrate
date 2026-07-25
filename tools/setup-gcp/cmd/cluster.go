@@ -70,6 +70,10 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 					InitialNodeCount: 2,
 					Config: &containerpb.NodeConfig{
 						MachineType: cfg.MachineType,
+						ImageType:   "COS_CONTAINERD",
+						GcfsConfig: &containerpb.GcfsConfig{
+							Enabled: true,
+						},
 					},
 				},
 			},

@@ -61,6 +61,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
+	applyStreamingPoCMounts(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
 
 	return appsv1ac.Deployment(wp.Name, wp.Namespace).
@@ -80,6 +81,40 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					"ate.dev/worker-pool": wp.Name,
 				}).
 				WithSpec(podSpecAC)))
+}
+
+// applyStreamingPoCMounts gives gvisor ateom pods access to the node's
+// containerd + gcfs snapshotter so the image-streaming PoC path can prepare
+// and mount gcfs snapshots (see internal/imagecache/streaming_linux.go).
+// The FUSE-bearing paths use HostToContainer propagation so gcfsd submounts
+// become visible in the pod. PoC only; harmless when streaming is unused.
+func applyStreamingPoCMounts(
+	podSpecAC *corev1ac.PodSpecApplyConfiguration,
+	containerAC *corev1ac.ContainerApplyConfiguration,
+	sandboxClass atev1alpha1.SandboxClass,
+) {
+	if sandboxClass == atev1alpha1.SandboxClassMicroVM {
+		return
+	}
+	type m struct {
+		name, path string
+		prop       bool
+	}
+	for _, v := range []m{
+		{"cd-sock", "/run/containerd", false},
+		{"gcfs-sock", "/run/containerd-gcfs-grpc", false},
+		{"cd-lib", "/var/lib/containerd", true},
+		{"gcfsd", "/run/gcfsd", true},
+	} {
+		vm := corev1ac.VolumeMount().WithName(v.name).WithMountPath(v.path)
+		if v.prop {
+			vm = vm.WithMountPropagation(corev1.MountPropagationHostToContainer)
+		}
+		containerAC.WithVolumeMounts(vm)
+		podSpecAC.WithVolumes(corev1ac.Volume().WithName(v.name).
+			WithHostPath(corev1ac.HostPathVolumeSource().
+				WithPath(v.path).WithType(corev1.HostPathDirectoryOrCreate)))
+	}
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a

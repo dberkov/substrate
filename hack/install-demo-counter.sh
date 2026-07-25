@@ -32,7 +32,11 @@ demo-counter_cmdline() {
 demo-counter_deploy() {
   log_step "demo-counter_deploy"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter.yaml.tmpl \
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter_part1.yaml.tmpl \
+    | run_ko apply -f -
+  log_step "sleeping...."
+  sleep 10
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter_part2.yaml.tmpl \
     | run_ko apply -f -
 
   # Wait for the demo to be fully ready before returning. On a cold cluster the
