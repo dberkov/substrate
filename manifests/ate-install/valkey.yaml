@@ -87,6 +87,24 @@ spec:
       labels:
         app: valkey-cluster
     spec:
+      # Tolerate the streaming-workers pool taint (image-streaming PoC) so this
+      # component still schedules after a redeploy regardless of node taints.
+      tolerations:
+      - key: ate.dev/pool
+        operator: Equal
+        value: streaming-workers
+        effect: NoSchedule
+      # Keep valkey (control-plane state store) on the main pool: recreating the
+      # streaming-workers pool for cold-start tests must not disturb quorum.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: ate.dev/pool
+                operator: NotIn
+                values:
+                - streaming-workers
       containers:
       - name: valkey
         image: valkey/valkey:9.1@sha256:4963247afc4cd33c7d3b2d2816b9f7f8eeebab148d29056c2ca4d7cbc966f2d9
@@ -159,6 +177,23 @@ spec:
         app: valkey-cluster-init
     spec:
       restartPolicy: OnFailure
+      # Tolerate the streaming-workers pool taint (image-streaming PoC) so this
+      # component still schedules after a redeploy regardless of node taints.
+      tolerations:
+      - key: ate.dev/pool
+        operator: Equal
+        value: streaming-workers
+        effect: NoSchedule
+      # Keep the cluster-init job on the main pool too (matches the StatefulSet).
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: ate.dev/pool
+                operator: NotIn
+                values:
+                - streaming-workers
       containers:
       - name: init
         image: valkey/valkey:9.1@sha256:4963247afc4cd33c7d3b2d2816b9f7f8eeebab148d29056c2ca4d7cbc966f2d9

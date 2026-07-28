@@ -24,10 +24,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -81,6 +83,22 @@ func Run() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(response))
 	})
+	// /filescount walks the rootfs and reports how many regular files it
+	// holds; /totalbytes additionally reads every file fully into memory and
+	// reports how much data was scanned. Both exist to exercise cold reads
+	// through the composed overlay rootfs (e.g. NFS-backed lower layers), not
+	// just metadata lookups.
+	defaultMux.HandleFunc("/filescount", func(w http.ResponseWriter, r *http.Request) {
+		res := scanRootfs(false)
+		slog.InfoContext(r.Context(), "Handled /filescount", slog.Int("files", res.files), slog.Int("skipped", res.skipped), slog.Duration("took", res.took))
+		fmt.Fprintf(w, "files: %d | skipped: %d | took: %s\n", res.files, res.skipped, res.took.Round(time.Millisecond))
+	})
+	defaultMux.HandleFunc("/totalbytes", func(w http.ResponseWriter, r *http.Request) {
+		res := scanRootfs(true)
+		slog.InfoContext(r.Context(), "Handled /totalbytes", slog.Int("files", res.files), slog.Int64("bytes", res.bytes), slog.Int("skipped", res.skipped), slog.Duration("took", res.took))
+		fmt.Fprintf(w, "scanned %d files, %s (%d bytes) | skipped: %d | took: %s\n",
+			res.files, humanBytes(res.bytes), res.bytes, res.skipped, res.took.Round(time.Millisecond))
+	})
 	// /readyz is the endpoint the ateom-gvisor readyz probe polls. It returns
 	// 200 only once initialization (the random-file write) has completed.
 	// After a checkpoint+restore the atomic flag is part of the snapshot, so
@@ -121,6 +139,69 @@ func Run() {
 		// TODO: Test outbound connectivity by pinging google.com
 		slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))
 		count++
+	}
+}
+
+// scanResult is what one rootfs walk observed.
+type scanResult struct {
+	files   int
+	bytes   int64
+	skipped int // entries that errored (permissions, vanished mid-walk, ...)
+	took    time.Duration
+}
+
+// scanRootfs walks the whole rootfs counting regular files. With
+// readContents it also reads each file fully into memory (os.ReadFile, so
+// content genuinely transits RAM rather than being stat'ed) and totals the
+// bytes. Kernel pseudo-filesystems are excluded: their files block or are
+// endless (/proc/kmsg, /dev/zero) and they are not part of the image rootfs.
+func scanRootfs(readContents bool) scanResult {
+	skipDirs := map[string]bool{"/proc": true, "/sys": true, "/dev": true}
+	start := time.Now()
+	var res scanResult
+	_ = filepath.WalkDir("/", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			res.skipped++
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if skipDirs[path] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		res.files++
+		if readContents {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				res.skipped++
+				return nil
+			}
+			res.bytes += int64(len(data))
+		}
+		return nil
+	})
+	res.took = time.Since(start)
+	return res
+}
+
+// humanBytes renders n in the largest fitting unit of b/kb/mb/gb (1024-based).
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.2f gb", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.2f mb", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.2f kb", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d b", n)
 	}
 }
 

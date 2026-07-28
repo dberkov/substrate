@@ -29,6 +29,17 @@ metadata:
 spec:
   replicas: 5
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  # Pin workers to the dedicated streaming pool so streaming measurements run on
+  # the pool we control (matches demos/streaming/counter-heavy). Tolerate the
+  # pool taint; nodeSelector forces placement there.
+  template:
+    nodeSelector:
+      ate.dev/pool: streaming-workers
+    tolerations:
+    - key: ate.dev/pool
+      operator: Equal
+      value: streaming-workers
+      effect: NoSchedule
 
 ---
 

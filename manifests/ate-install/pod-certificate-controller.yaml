@@ -189,6 +189,24 @@ spec:
       dnsPolicy: Default
       nodeSelector:
         kubernetes.io/os: linux
+      # Tolerate the streaming-workers pool taint (image-streaming PoC) so this
+      # component still schedules after a redeploy regardless of node taints.
+      tolerations:
+      - key: ate.dev/pool
+        operator: Equal
+        value: streaming-workers
+        effect: NoSchedule
+      # Keep this control-plane component on the main pool: recreating the
+      # streaming-workers pool for cold-start tests must not disturb it.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: ate.dev/pool
+                operator: NotIn
+                values:
+                - streaming-workers
       restartPolicy: Always
       schedulerName: default-scheduler
       securityContext: {}

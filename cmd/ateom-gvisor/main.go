@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/internal/actorlog"
@@ -391,9 +392,14 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for "pause" container.
 	//   * Checkpoint downloaded and placed on disk
 
+	// PoC restore-phase timing (decompose the opaque ateom_restore number).
+	tStart := time.Now()
+	var dNet, dRootfs, dCreate, dRestore, dReadyz time.Duration
+	tNet := time.Now()
 	if err := s.setupActorNetwork(ctx); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
+	dNet = time.Since(tNet)
 	defer func() {
 		if retErr != nil {
 			// Same overlay detach as the Run-failure path above.
@@ -415,9 +421,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
+	tpr := time.Now()
 	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
+	dRootfs += time.Since(tpr)
 
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
@@ -430,12 +438,16 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		// Create and restore pause container
+		tc := time.Now()
 		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
+		dCreate += time.Since(tc)
+		tr := time.Now()
 		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
+		dRestore += time.Since(tr)
 	default:
 		return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 	}
@@ -448,9 +460,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
+		tar := time.Now()
 		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
+		dRootfs += time.Since(tar)
 		switch req.GetScope() {
 		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
@@ -460,21 +474,38 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
 		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+			tc := time.Now()
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 			}
+			dCreate += time.Since(tc)
+			tr := time.Now()
 			if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
+			dRestore += time.Since(tr)
 		default:
 			return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 		}
 	}
 
 	// Block until every readyz-enabled container reports 200.
+	trz := time.Now()
 	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), actorVethIP); err != nil {
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
+	dReadyz = time.Since(trz)
+
+	// PoC breakdown: net setup, rootfs compose (gcfs mount), runsc create,
+	// runsc restore (incl. rootfs page-in over gcfs + memory paging), readyz.
+	slog.InfoContext(ctx, "ateom restore breakdown",
+		slog.String("actor", req.GetActorName()),
+		slog.Duration("net", dNet),
+		slog.Duration("rootfs_compose", dRootfs),
+		slog.Duration("runsc_create", dCreate),
+		slog.Duration("runsc_restore", dRestore),
+		slog.Duration("readyz", dReadyz),
+		slog.Duration("total", time.Since(tStart)))
 
 	s.actorLogger.EmitLifecycleLog("Actor restored", req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 

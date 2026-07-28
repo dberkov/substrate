@@ -64,6 +64,17 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
+      # atelet must run on every worker node, including the dedicated
+      # streaming-workers pool (image-streaming PoC), which is tainted
+      # ate.dev/pool=streaming-workers:NoSchedule to keep control-plane pods off
+      # it. Tolerate that taint so atelet is scheduled there too; without this,
+      # a cold recreate of the streaming-workers pool would leave those nodes
+      # without an atelet and actors could not run.
+      tolerations:
+      - key: ate.dev/pool
+        operator: Equal
+        value: streaming-workers
+        effect: NoSchedule
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet

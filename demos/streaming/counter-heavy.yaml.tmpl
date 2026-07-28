@@ -40,12 +40,22 @@ spec:
   replicas: 2
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
   sandboxClass: gvisor
-  # Only needed if image streaming is enabled on a *subset* of nodes: label
-  # those nodes and uncomment this to pin workers to them. Not needed when
-  # streaming is on every node the pool schedules to.
-  #template:
-  #  nodeSelector:
-  #    cloud.google.com/gke-image-streaming: "true"
+  # Pin workers to the dedicated streaming worker pool, so recreating those
+  # nodes for cold-start measurements never disturbs the control plane (which
+  # runs on the main pool). Create the pool with:
+  #   gcloud container node-pools create streaming-workers --enable-image-streaming \
+  #     --node-labels ate.dev/pool=streaming-workers ...
+  template:
+    nodeSelector:
+      ate.dev/pool: streaming-workers
+    # Tolerate the pool taint so only streaming workers (not control-plane
+    # pods) land here — keeps the control plane on the main pool so cold-test
+    # recreates of this pool never disturb it.
+    tolerations:
+    - key: ate.dev/pool
+      operator: Equal
+      value: streaming-workers
+      effect: NoSchedule
 
 ---
 
