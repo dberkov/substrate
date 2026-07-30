@@ -40,6 +40,10 @@ demo-streaming_cmdline() {
 demo-streaming_deploy() {
   log_step "demo-streaming_deploy"
   ensure_crds
+  # Push the counterheavy image and prewarm it in the image-streaming cache
+  # before the apply below creates the ActorTemplate, so the golden-snapshot
+  # pull streams instead of paying the cold chunk-and-index penalty.
+  prewarm_actor_image github.com/agent-substrate/substrate/demos/streaming/counterheavy
   # ko builds the counterheavy server onto the large base from .ko.yaml and
   # resolves the ko:// ref to a pinned digest.
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/streaming/counter-heavy.yaml.tmpl \

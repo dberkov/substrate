@@ -34,8 +34,7 @@ demo-counter_deploy() {
   ensure_crds
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter_part1.yaml.tmpl \
     | run_ko apply -f -
-  log_step "sleeping...."
-  sleep 10
+  prewarm_actor_image github.com/agent-substrate/substrate/demos/counter
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter_part2.yaml.tmpl \
     | run_ko apply -f -
 

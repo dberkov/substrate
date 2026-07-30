@@ -133,6 +133,154 @@ run_ko() {
   esac
 }
 
+# prewarm_actor_image <ko-import-path>
+#
+# Prewarm an actor image in Artifact Registry's image-streaming (Riptide)
+# cache. AR only serves an image via the streaming path after it has chunked
+# and indexed it, and that normally happens on the *first* streaming pull -- so
+# without this, the golden-snapshot / first-actor start pays a one-time
+# cold-pull penalty. Calling prewarmArtifact after the push but before the
+# ActorTemplate exists moves that indexing to deploy time.
+#
+# Only meaningful when the atelet runs with --image-streaming-poc; harmless
+# (and skipped for non-AR registries, e.g. the kind local registry) otherwise.
+# Requires roles/artifactregistry.writer on the repository. Best-effort: any
+# failure logs a warning and the deploy continues with today's cold-pull
+# behavior.
+prewarm_actor_image() {
+  local import_path="${1}"
+  log_step "prewarm_actor_image ${import_path}"
+
+  # ko build pushes the image and prints the digest-pinned reference. The
+  # caller's later `run_ko apply` rebuilds from the same source and ldflags, so
+  # it resolves to the same digest and the push is a registry cache hit.
+  local image_ref
+  if ! image_ref=$(run_ko build "${import_path}"); then
+    echo "prewarm: ko build failed; skipping prewarm" >&2
+    return 0
+  fi
+
+  local registry_host="${image_ref%%/*}"
+  local rest="${image_ref#*/}" # <project>/<package path>@sha256:<digest>
+  local digest="${image_ref##*@}"
+  local project="${rest%%/*}"
+  local package_path="${rest#*/}"
+  package_path="${package_path%@*}"
+
+  # Map the registry host to an Artifact Registry (location, repository) pair.
+  # gcr.io-hosted AR repos are named after their domain; *-docker.pkg.dev
+  # encodes the location in the host and the repo as the first path segment.
+  local location repo
+  case "${registry_host}" in
+    gcr.io) location="us" repo="gcr.io" ;;
+    us.gcr.io) location="us" repo="us.gcr.io" ;;
+    eu.gcr.io) location="europe" repo="eu.gcr.io" ;;
+    asia.gcr.io) location="asia" repo="asia.gcr.io" ;;
+    *-docker.pkg.dev)
+      location="${registry_host%-docker.pkg.dev}"
+      repo="${package_path%%/*}"
+      package_path="${package_path#*/}"
+      ;;
+    *)
+      log_step "prewarm: ${registry_host} is not Artifact Registry; skipping"
+      return 0
+      ;;
+  esac
+
+  if ! command -v gcloud >/dev/null 2>&1; then
+    echo "prewarm: gcloud not found; skipping prewarm" >&2
+    return 0
+  fi
+  local token
+  token=$(gcloud auth print-access-token)
+
+  # Corp-managed user accounts issue certificate-bound access tokens: they are
+  # only accepted over mTLS connections presenting the Endpoint Verification
+  # client certificate (gcloud does this internally; a bare curl gets 401
+  # ACCESS_TOKEN_TYPE_UNSUPPORTED). If the Secure Connect cert helper is
+  # configured, fetch the cert and talk to the mTLS endpoint; otherwise use the
+  # regular endpoint (service-account tokens are not cert-bound).
+  local ar_host="artifactregistry.googleapis.com"
+  local cert_file="" curl_cert_args=()
+  local cam="${HOME}/.secureConnect/context_aware_metadata.json"
+  if [[ -f "${cam}" ]] && command -v python3 >/dev/null 2>&1; then
+    cert_file=$(mktemp)
+    chmod 600 "${cert_file}"
+    if python3 -c 'import json,subprocess,sys
+cmd = json.load(open(sys.argv[1]))["cert_provider_command"]
+sys.stdout.write(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)' \
+      "${cam}" >"${cert_file}" 2>/dev/null && grep -q "BEGIN" "${cert_file}"; then
+      ar_host="artifactregistry.mtls.googleapis.com"
+      curl_cert_args=(--cert "${cert_file}")
+    else
+      rm -f "${cert_file}"
+      cert_file=""
+    fi
+  fi
+
+  # The prewarm API rejects multi-arch image indexes -- it needs an
+  # architecture-specific sub-image digest. ko pushes an index, so resolve it
+  # to the linux/amd64 manifest digest via the registry v2 API. (The registry
+  # endpoint, unlike the AR management API, accepts cert-bound tokens without
+  # mTLS -- it is the same path the ko push went through.) On any resolution
+  # failure keep the index digest and let the prewarm request report the error.
+  local repo_path="${rest%@*}" sub_digest=""
+  if command -v python3 >/dev/null 2>&1; then
+    sub_digest=$(curl -sS -u "oauth2accesstoken:${token}" \
+      -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json" \
+      "https://${registry_host}/v2/${repo_path}/manifests/${digest}" \
+      | python3 -c 'import json, sys
+m = json.load(sys.stdin)
+if "manifests" in m:
+    print(next((e["digest"] for e in m["manifests"]
+                if e.get("platform", {}).get("os") == "linux"
+                and e.get("platform", {}).get("architecture") == "amd64"), ""))' \
+      2>/dev/null || true)
+  fi
+  if [[ "${sub_digest}" == sha256:* ]]; then
+    digest="${sub_digest}"
+  fi
+
+  # Slashes in the package name must be URL-encoded in the version resource.
+  local encoded_package="${package_path//\//%2F}"
+  local version_resource="projects/${project}/locations/${location}/repositories/${repo}/packages/${encoded_package}/versions/${digest}"
+
+  log_step "prewarm: requesting prewarm of ${image_ref}"
+  local response
+  response=$(curl -sS "${curl_cert_args[@]}" -X POST \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\": \"${version_resource}\"}" \
+    "https://${ar_host}/v1/projects/${project}/locations/${location}/repositories/${repo}:prewarmArtifact" || true)
+
+  local operation
+  operation=$(sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' <<<"${response}" | head -n 1)
+  if [[ -z "${operation}" || "${operation}" != projects/* ]]; then
+    echo "prewarm: request failed, continuing without prewarm: ${response}" >&2
+    [[ -n "${cert_file}" ]] && rm -f "${cert_file}"
+    return 0
+  fi
+
+  # Poll until the indexing operation completes so the ActorTemplate created
+  # by the caller gets a warm first pull. Bounded so a stuck operation cannot
+  # wedge the deploy.
+  local deadline=$((SECONDS + 300)) status
+  while ((SECONDS < deadline)); do
+    status=$(curl -sS "${curl_cert_args[@]}" -H "Authorization: Bearer ${token}" \
+      "https://${ar_host}/v1/${operation}" || true)
+    if grep -q '"done": *true' <<<"${status}"; then
+      log_step "prewarm: ${image_ref} indexed for image streaming"
+      [[ -n "${cert_file}" ]] && rm -f "${cert_file}"
+      return 0
+    fi
+    echo "prewarm: waiting for image layers to be indexed..."
+    sleep 3
+  done
+  echo "prewarm: operation did not complete within 300s, continuing: ${status}" >&2
+  [[ -n "${cert_file}" ]] && rm -f "${cert_file}"
+  return 0
+}
+
 ate_auth_mode() {
   case "${ATE_API_AUTH_MODE:-mtls}" in
     mtls|jwt)

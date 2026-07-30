@@ -37,7 +37,7 @@ metadata:
   labels:
     workload: streaming
 spec:
-  replicas: 2
+  replicas: 5
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
   sandboxClass: gvisor
   # Pin workers to the dedicated streaming worker pool, so recreating those

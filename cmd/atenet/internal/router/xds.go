@@ -373,7 +373,11 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: "dynamic_forward_proxy_cluster",
 								},
-								Timeout: durationpb.New(10 * time.Second),
+								// POC: generous upstream timeout so long-running
+								// actor endpoints (full-rootfs scans in the demo
+								// server, minutes over NFS-backed layers) can
+								// finish; was 10s.
+								Timeout: durationpb.New(30 * time.Minute),
 							},
 						},
 					},
@@ -421,6 +425,10 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 	hcm, _ := anypb.New(&hcmv3.HttpConnectionManager{
 		StatPrefix:        statPrefix,
 		GenerateRequestId: &wrapperspb.BoolValue{Value: true},
+		// POC: the demo server's rootfs-scan endpoints send no bytes until
+		// the scan completes, so Envoy's default 5m stream idle timeout would
+		// cut them off regardless of the route timeout above.
+		StreamIdleTimeout: durationpb.New(30 * time.Minute),
 		Tracing:           x.buildTracing(),
 		AccessLog: []*accesslogv3.AccessLog{
 			{
