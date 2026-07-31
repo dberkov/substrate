@@ -43,6 +43,7 @@ import (
 	"github.com/google/nftables/expr"
 	"github.com/hashicorp/go-reap"
 	"github.com/spf13/pflag"
+	"golang.org/x/sync/errgroup"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -179,6 +180,28 @@ func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger)
 	return svc
 }
 
+// composeBundleRootfsAll composes the pause and application container bundle
+// rootfs mounts concurrently. Composition is per-bundle independent, and on
+// image-cold nodes a streamed rootfs pays per-image pull costs (registry
+// round trips, gcfsd layer indexing) that would otherwise serialize behind
+// the pause container's setup.
+func composeBundleRootfsAll(actorUID string, containers []*ateompb.Container) error {
+	var g errgroup.Group
+	compose := func(name string) {
+		g.Go(func() error {
+			if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(actorUID, name)); err != nil {
+				return fmt.Errorf("while composing %q rootfs: %w", name, err)
+			}
+			return nil
+		})
+	}
+	compose("pause")
+	for _, ac := range containers {
+		compose(ac.GetName())
+	}
+	return g.Wait()
+}
+
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -204,6 +227,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
+			imagecache.RemoveStreamingSnapshots(ateompath.OCIBundleDir(req.GetActorUid()))
 			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after Run failure")
 		}
 	}()
@@ -213,14 +237,18 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		actorUID: req.GetActorUid(),
 	}
 
-	// Create and start pause container. The bundle rootfs is composed here —
-	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateom's job (atelet runs with no
-	// capabilities); runsc's gofer resolves the mount in this pod's mount
-	// namespace.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	// Compose every bundle rootfs up front, in parallel. Composing is ateom's
+	// job — an overlay of the node's cached image layers plus the bundle's
+	// private upper — because mounting needs capabilities atelet deliberately
+	// drops; runsc's gofer resolves the mount in this pod's mount namespace.
+	// Parallel because on image-cold nodes a streamed app rootfs pays
+	// per-image pull costs (registry round trips, gcfsd layer indexing) that
+	// should overlap pause setup instead of serializing behind it.
+	if err := composeBundleRootfsAll(req.GetActorUid(), req.GetSpec().GetContainers()); err != nil {
+		return nil, err
 	}
+
+	// Create and start pause container.
 	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
@@ -236,9 +264,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
-			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
-		}
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
@@ -322,6 +347,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			"actorUID", req.GetActorUid(),
 			"err", err)
 	}
+	imagecache.RemoveStreamingSnapshots(ateompath.OCIBundleDir(req.GetActorUid()))
 
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after checkpoint")
 
@@ -407,6 +433,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
+			imagecache.RemoveStreamingSnapshots(ateompath.OCIBundleDir(req.GetActorUid()))
 			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after Restore failure")
 		}
 	}()
@@ -418,14 +445,15 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
 
-	// Compose the pause rootfs before create (see RunWorkload). runsc restore
-	// only needs the rootfs to hold the correct content; whether it came from
-	// an untar or an overlay of cached layers is transparent to it.
+	// Compose every bundle rootfs before the creates, in parallel (see
+	// RunWorkload). runsc only needs each rootfs to hold the correct content;
+	// whether it came from an untar, an overlay of cached layers, or a gcfs
+	// streaming mount is transparent to it.
 	tpr := time.Now()
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	if err := composeBundleRootfsAll(req.GetActorUid(), req.GetSpec().GetContainers()); err != nil {
+		return nil, err
 	}
-	dRootfs += time.Since(tpr)
+	dRootfs = time.Since(tpr)
 
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
@@ -460,11 +488,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		tar := time.Now()
-		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
-			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
-		}
-		dRootfs += time.Since(tar)
 		switch req.GetScope() {
 		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {

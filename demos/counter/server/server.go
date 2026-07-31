@@ -90,14 +90,14 @@ func Run() {
 	// just metadata lookups.
 	defaultMux.HandleFunc("/filescount", func(w http.ResponseWriter, r *http.Request) {
 		res := scanRootfs(false)
-		slog.InfoContext(r.Context(), "Handled /filescount", slog.Int("files", res.files), slog.Int("skipped", res.skipped), slog.Duration("took", res.took))
-		fmt.Fprintf(w, "files: %d | skipped: %d | took: %s\n", res.files, res.skipped, res.took.Round(time.Millisecond))
+		slog.InfoContext(r.Context(), "Handled /filescount", slog.Int("files", res.files), slog.Int("skipped", res.skipped), slog.Duration("took", res.took), slog.Any("firstErr", res.firstErr))
+		fmt.Fprintf(w, "files: %d | skipped: %d | took: %s%s\n", res.files, res.skipped, res.took.Round(time.Millisecond), firstErrSuffix(res))
 	})
 	defaultMux.HandleFunc("/totalbytes", func(w http.ResponseWriter, r *http.Request) {
 		res := scanRootfs(true)
-		slog.InfoContext(r.Context(), "Handled /totalbytes", slog.Int("files", res.files), slog.Int64("bytes", res.bytes), slog.Int("skipped", res.skipped), slog.Duration("took", res.took))
-		fmt.Fprintf(w, "scanned %d files, %s (%d bytes) | skipped: %d | took: %s\n",
-			res.files, humanBytes(res.bytes), res.bytes, res.skipped, res.took.Round(time.Millisecond))
+		slog.InfoContext(r.Context(), "Handled /totalbytes", slog.Int("files", res.files), slog.Int64("bytes", res.bytes), slog.Int("skipped", res.skipped), slog.Duration("took", res.took), slog.Any("firstErr", res.firstErr))
+		fmt.Fprintf(w, "scanned %d files, %s (%d bytes) | skipped: %d | took: %s%s\n",
+			res.files, humanBytes(res.bytes), res.bytes, res.skipped, res.took.Round(time.Millisecond), firstErrSuffix(res))
 	})
 	// /readyz is the endpoint the ateom-gvisor readyz probe polls. It returns
 	// 200 only once initialization (the random-file write) has completed.
@@ -144,10 +144,11 @@ func Run() {
 
 // scanResult is what one rootfs walk observed.
 type scanResult struct {
-	files   int
-	bytes   int64
-	skipped int // entries that errored (permissions, vanished mid-walk, ...)
-	took    time.Duration
+	files    int
+	bytes    int64
+	skipped  int // entries that errored (permissions, vanished mid-walk, ...)
+	took     time.Duration
+	firstErr error // first error the walk hit (nil if none); a root error aborts the whole walk
 }
 
 // scanRootfs walks the whole rootfs counting regular files. With
@@ -162,6 +163,9 @@ func scanRootfs(readContents bool) scanResult {
 	_ = filepath.WalkDir("/", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			res.skipped++
+			if res.firstErr == nil {
+				res.firstErr = err
+			}
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
 			}
@@ -181,6 +185,9 @@ func scanRootfs(readContents bool) scanResult {
 			data, err := os.ReadFile(path)
 			if err != nil {
 				res.skipped++
+				if res.firstErr == nil {
+					res.firstErr = err
+				}
 				return nil
 			}
 			res.bytes += int64(len(data))
@@ -189,6 +196,17 @@ func scanRootfs(readContents bool) scanResult {
 	})
 	res.took = time.Since(start)
 	return res
+}
+
+// firstErrSuffix renders the walk's first error for the HTTP response ("" if
+// the walk was clean). The error is a *fs.PathError, so it names the path and
+// errno — enough to tell a not-yet-ready gcfs lower (EIO on "/") from a
+// permission or revalidation problem.
+func firstErrSuffix(res scanResult) string {
+	if res.firstErr == nil {
+		return ""
+	}
+	return fmt.Sprintf(" | first error: %v", res.firstErr)
 }
 
 // humanBytes renders n in the largest fitting unit of b/kb/mb/gb (1024-based).

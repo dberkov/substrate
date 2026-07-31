@@ -31,14 +31,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/remotes/docker"
+	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/snapshotters"
 	"github.com/containerd/platforms"
@@ -49,6 +53,10 @@ const (
 	streamingSocket      = "/run/containerd/containerd.sock"
 	streamingSnapshotter = "gcfs"
 	streamingNamespace   = "k8s.io"
+
+	// streamingListableTimeout bounds the post-mount wait for the gcfs lower
+	// to serve directory enumeration (see the readdir probe below).
+	streamingListableTimeout = 30 * time.Second
 )
 
 // setupStreamingRootfs prepares an actor rootfs at rootfs by pulling ref
@@ -106,8 +114,18 @@ func setupStreamingRootfs(ctx context.Context, ref, rootfs, snapKey string, extr
 	sn := client.SnapshotService(streamingSnapshotter)
 	// A fresh writable snapshot per run (Prepare, not View) so the workload
 	// can write to its rootfs; removed at teardown, discarding those writes.
+	//
+	// The gc.root label is load-bearing: without it the snapshot is
+	// unreferenced in containerd's metadata (no lease, no container record),
+	// and the next GC sweep deletes its backing dirs out from under the live
+	// overlay mount — after which every readdir through the rootfs returns
+	// ENOENT. The label pins the snapshot and, via parent refs, the whole
+	// chain. The flip side: pinned snapshots are never collected, so
+	// RemoveStreamingSnapshots at teardown is mandatory, not best-practice.
 	_ = sn.Remove(ctx, snapKey)
-	mounts, err := sn.Prepare(ctx, snapKey, chainID)
+	mounts, err := sn.Prepare(ctx, snapKey, chainID, snapshots.WithLabels(map[string]string{
+		"containerd.io/gc.root": time.Now().UTC().Format(time.RFC3339),
+	}))
 	if err != nil {
 		return fmt.Errorf("preparing gcfs snapshot: %w", err)
 	}
@@ -118,10 +136,80 @@ func setupStreamingRootfs(ctx context.Context, ref, rootfs, snapKey string, extr
 		return fmt.Errorf("mounting gcfs snapshot at %q: %w", rootfs, err)
 	}
 
+	// Right after a cold pull, gcfsd can answer the first readdir of a layer
+	// with ENOENT while it is still loading the layer's directory index
+	// (lookups of known names work before enumeration does), and the workload's
+	// first directory listing through the overlay fails. Probe an enumeration
+	// through the mount and retry until the rootfs is genuinely listable, so
+	// the sandbox never sees the warmup window. On a warm node the first probe
+	// succeeds and this costs one readdir.
+	probeStart := time.Now()
+	for attempt := 1; ; attempt++ {
+		entries, err := os.ReadDir(rootfs)
+		if err == nil && len(entries) > 0 {
+			if attempt > 1 {
+				slog.Info("gcfs rootfs became listable after warmup",
+					slog.String("rootfs", rootfs),
+					slog.Int("entries", len(entries)),
+					slog.Int("attempts", attempt),
+					slog.Duration("waited", time.Since(probeStart)))
+			}
+			break
+		}
+		if err == nil {
+			// An image rootfs is never empty: a successful-but-empty listing
+			// means the overlay's lower is present but dead (not yet served by
+			// gcfsd), so keep waiting.
+			err = fmt.Errorf("rootfs lists empty")
+		}
+		if time.Since(probeStart) > streamingListableTimeout {
+			return fmt.Errorf("rootfs %q not listable %s after gcfs mount: %w", rootfs, streamingListableTimeout, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	if err := createExtraDirs(rootfs, extraDirs); err != nil {
 		return err
 	}
+
+	// Warm the rootfs metadata in the background: workloads whose first
+	// request touches the whole tree otherwise pay gcfsd's lazy per-directory
+	// index fetches inside the sandbox, where every operation also carries
+	// sentry/gofer round-trip cost. Walking host-side is cheap and gcfsd's
+	// cache is node-level, so this is effectively once per node per image.
+	go warmRootfsMetadata(rootfs)
 	return nil
+}
+
+// warmRootfsMetadata walks the mounted rootfs host-side, forcing gcfsd to
+// fetch every directory index and inode record now instead of on the
+// workload's first access. File *content* is deliberately not read: gcfsd
+// hydrates data to the node's local cache in the background on its own, and
+// a content sweep here would compete with it for AR bandwidth. Best-effort:
+// errors (including the mount disappearing at actor teardown) just end the
+// walk early.
+func warmRootfsMetadata(rootfs string) {
+	start := time.Now()
+	var files, skipped int
+	_ = filepath.WalkDir(rootfs, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			skipped++
+			return nil
+		}
+		if _, err := d.Info(); err != nil { // lstat, pulls the inode record
+			skipped++
+			return nil
+		}
+		if !d.IsDir() {
+			files++
+		}
+		return nil
+	})
+	slog.Info("gcfs rootfs metadata warmed",
+		slog.String("rootfs", rootfs),
+		slog.Int("files", files),
+		slog.Int("skipped", skipped),
+		slog.Duration("took", time.Since(start)))
 }
 
 // streamingSnapKey derives a stable containerd snapshot key from the bundle
@@ -147,6 +235,29 @@ func metadataToken() (string, error) {
 		return "", err
 	}
 	return t.AccessToken, nil
+}
+
+// RemoveStreamingSnapshots removes the gcfs snapshots backing any streaming
+// bundles under bundleDir (best-effort). Counterpart of the gc.root pin in
+// setupStreamingRootfs: pinned snapshots are never collected by containerd,
+// so teardown must delete them explicitly or they accumulate on the node.
+// Call after UnmountAllUnder has detached the overlay mounts.
+func RemoveStreamingSnapshots(bundleDir string) {
+	entries, err := os.ReadDir(bundleDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		bundlePath := filepath.Join(bundleDir, e.Name())
+		spec, err := ReadSpec(bundlePath)
+		if err != nil || spec == nil || spec.Streaming == "" {
+			continue
+		}
+		removeStreamingSnapshot(streamingSnapKey(bundlePath))
+	}
 }
 
 // removeStreamingSnapshot removes the named gcfs snapshot (best-effort;

@@ -81,7 +81,13 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	// ateom to stream through the node's gcfs snapshotter. atelet never
 	// touches image content, so argv must come from the ActorTemplate
 	// command/args (no image config to consult here).
-	if imageStreamingPoC != nil && *imageStreamingPoC {
+	//
+	// The pause container is exempt: its one-file rootfs gains nothing from
+	// streaming, and a streamed pause costs a full extra cold pull (token,
+	// resolve, gcfsd layer setup) on image-cold nodes — measured at ~3.7s of
+	// the first actor's startup, triple the 8GB app image's ~1.1s. The layer
+	// pool below is fast and node-cached.
+	if imageStreamingPoC != nil && *imageStreamingPoC && containerName != "pause" {
 		resolvedArgs, err := resolveProcessArgs(nil, command, args)
 		if err != nil {
 			return fmt.Errorf("streaming PoC requires ActorTemplate command for %q: %w", containerName, err)
