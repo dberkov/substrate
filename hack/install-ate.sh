@@ -346,6 +346,32 @@ apply_otel_endpoint_override() {
   done
 }
 
+# Install the cluster-wide default gVisor SandboxConfig. On GKE with a
+# snapshot bucket configured, first repack the upstream bzip2 release tarball
+# to zstd in the bucket (hack/gvisor-assets/repack-and-stage.sh) and apply the
+# manifest rewritten to point at it: stdlib bzip2 extraction costs each node
+# ~20s on its first actor operation, zstd well under a second. Re-runs reuse
+# the already-staged object, so this adds no meaningful time to a redeploy.
+# Applies the stock manifest (upstream bzip2, slow but always available) on
+# kind, when ATE_GVISOR_REPACK=false, when no bucket is configured, or when
+# staging fails.
+apply_gvisor_sandboxconfig() {
+  log_step "apply_gvisor_sandboxconfig"
+  local stock="manifests/ate-install/sandboxconfig-gvisor.yaml"
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" || "${ATE_GVISOR_REPACK:-true}" != "true" || -z "${BUCKET_NAME:-}" ]]; then
+    run_kubectl apply -f "${stock}"
+    return
+  fi
+  local rendered=""
+  if rendered="$(BUCKET="${BUCKET_NAME}" "${ROOT}/hack/gvisor-assets/repack-and-stage.sh" --from-manifest "${stock}")" \
+      && [[ -n "${rendered}" ]]; then
+    echo "${rendered}" | run_kubectl apply -f -
+  else
+    echo "WARNING: gVisor asset repack failed; applying ${stock} as-is (upstream bzip2, ~20s first-touch extraction per node)" >&2
+    run_kubectl apply -f "${stock}"
+  fi
+}
+
 # Extract a CA pool secret's RootCertificateDER and emit it as a PEM certificate.
 # The namespace defaults to the podcertificate controller's, where the signer
 # CAs live; the actor-identity CA pool is in ate-system, so it passes its own.
@@ -551,7 +577,7 @@ deploy_ate_system() {
   # cluster-scoped SandboxConfigs resolved via each WorkerPool's SandboxClass
   # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
   # they name their own SandboxConfig.
-  run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
+  apply_gvisor_sandboxconfig
 
   # Ahead of the bundle below, for the same reason as the namespace: every
   # workload pulls this ConfigMap in via envFrom, and a container whose envFrom
