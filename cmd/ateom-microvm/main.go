@@ -41,6 +41,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -52,6 +53,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -99,6 +102,13 @@ func main() {
 	}
 }
 
+// serviceName identifies this binary in telemetry.
+const serviceName = "ateom-microvm"
+
+// tracer emits ateom's own child spans; started from a lifecycle RPC's ctx,
+// they nest under the otelgrpc server span and break its duration down.
+var tracer = otel.Tracer(serviceName)
+
 func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -113,7 +123,6 @@ func do(ctx context.Context) error {
 	}
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
 
-	const serviceName = "ateom-microvm"
 	// Export through atelet's node-local relay when it is there, so telemetry
 	// never touches the worker pod's network. A nil conn means it is not, and
 	// both providers fall back to dialing the collector directly.
@@ -506,6 +515,9 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 	if gateway == nil {
 		return nil, nil
 	}
+	ctx, span := tracer.Start(ctx, "prepareActorEgress",
+		trace.WithAttributes(ateattr.ActorUIDKey.String(actorUID)))
+	defer span.End()
 	if gateway.GetAddress() == "" {
 		return nil, fmt.Errorf("egress gateway address is required")
 	}

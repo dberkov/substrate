@@ -31,9 +31,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
+
+// tracer emits readyz's child spans: the readiness wait often dominates a
+// Run/Restore RPC's latency, so each container's wait belongs in the trace.
+var tracer = otel.Tracer("readyz")
 
 // Tuning knobs. Sized for actor cold-start where the HTTP server may take
 // a few seconds to bind; HTTPClient below is a var so tests can substitute
@@ -66,6 +73,8 @@ var HTTPClient = func() *http.Client {
 // or returns the first error. Containers without a probe are skipped (their
 // absence means "no readiness gate").
 func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP string) error {
+	ctx, span := tracer.Start(ctx, "readyz.WaitAll")
+	defer span.End()
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ac := range containers {
 		if ac.GetReadyz() == nil {
@@ -82,6 +91,9 @@ func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP strin
 // Wait polls the configured HTTP endpoint until it returns 200, the context
 // is cancelled, or the overall deadline is exceeded.
 func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, actorIP string) error {
+	ctx, span := tracer.Start(ctx, "readyz.Wait",
+		trace.WithAttributes(ateattr.ActorContainerNameKey.String(containerName)))
+	defer span.End()
 	url, err := URL(probe, actorIP)
 	if err != nil {
 		return fmt.Errorf("invalid readyz config for %q: %w", containerName, err)

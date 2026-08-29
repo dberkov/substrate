@@ -31,8 +31,13 @@ import (
 	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sys/unix"
 )
+
+// tracer emits ateomnet's child spans: actor network setup sits on the actor
+// boot and restore critical paths, so its latency belongs in lifecycle traces.
+var tracer = otel.Tracer("ateomnet")
 
 const (
 	HostVethName      = "ateom0"
@@ -483,6 +488,8 @@ type NetworkConfig struct {
 // SetupActorNetwork builds a fresh point-to-point network between the worker
 // pod netns and the interior netns.
 func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
+	ctx, span := tracer.Start(ctx, "ateomnet.SetupActorNetwork")
+	defer span.End()
 	// Build a fresh point-to-point network between the worker pod netns and the
 	// gVisor interior netns. The worker side keeps the pod's real eth0 and creates
 	// ateom0 as the gateway; the pair's peer is born inside the actor netns as

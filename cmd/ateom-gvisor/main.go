@@ -36,6 +36,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -54,6 +55,8 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -92,6 +95,13 @@ const actorHTTPUpstream = "http://" + ateomnet.ActorVethIP + ":80"
 // termination grace period for the ateom.
 const workloadGracePeriod = 1 * time.Minute
 
+// serviceName identifies this binary in telemetry.
+const serviceName = "ateom-gvisor"
+
+// tracer emits ateom's own child spans; started from a lifecycle RPC's ctx,
+// they nest under the otelgrpc server span and break its duration down.
+var tracer = otel.Tracer(serviceName)
+
 func main() {
 	pflag.Parse()
 	if *showVersion {
@@ -120,7 +130,6 @@ func do(ctx context.Context) error {
 
 	slog.InfoContext(ctx, "ateom booting")
 
-	const serviceName = "ateom-gvisor"
 	// Export through atelet's node-local relay when it is there, so telemetry
 	// never touches the worker pod's network. A nil conn means it is not, and
 	// both providers fall back to dialing the collector directly.
@@ -668,7 +677,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// upper — because mounting is ateom's job (atelet runs with no
 	// capabilities); runsc's gofer resolves the mount in this pod's mount
 	// namespace.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+	if err := imagecache.SetupBundleRootfs(ctx, ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 	containersToDelete = append(containersToDelete, "pause")
@@ -687,7 +696,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
+		if err := imagecache.SetupBundleRootfs(ctx, ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		containersToDelete = append(containersToDelete, ac.GetName())
@@ -934,7 +943,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+	if err := imagecache.SetupBundleRootfs(ctx, ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
@@ -969,7 +978,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
+		if err := imagecache.SetupBundleRootfs(ctx, ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		if err := maybeInjectGPU(ctx, req.GetActorUid(), ac.GetName()); err != nil {
@@ -1023,6 +1032,9 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 	if gateway == nil {
 		return nil, nil
 	}
+	ctx, span := tracer.Start(ctx, "prepareActorEgress",
+		trace.WithAttributes(ateattr.ActorUIDKey.String(actorUID)))
+	defer span.End()
 	if gateway.GetAddress() == "" {
 		return nil, fmt.Errorf("egress gateway address is required")
 	}

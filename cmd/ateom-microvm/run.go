@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -41,6 +42,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -363,6 +365,9 @@ func (s *AteomService) coldBootActorRetrying(ctx context.Context, p actorBootPar
 // containers, registering the result in s.running. The caller holds s.lock and
 // owns the lifecycle logging.
 func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (retErr error) {
+	ctx, span := tracer.Start(ctx, "coldBootActor",
+		trace.WithAttributes(ateattr.ActorUIDKey.String(p.actorUID)))
+	defer span.End()
 	actorUID := p.actorUID
 
 	// All of the actor's containers share the one micro-VM (which is the pod
@@ -443,7 +448,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay
 	// lower the host merges under the container's writable upper).
-	ctrs, err := s.buildActorContainers(actorUID, containers)
+	ctrs, err := s.buildActorContainers(ctx, actorUID, containers)
 	if err != nil {
 		return err
 	}
@@ -620,7 +625,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteomService) buildActorContainers(actorUID string, containers []*ateompb.Container) ([]actorContainer, error) {
+func (s *AteomService) buildActorContainers(ctx context.Context, actorUID string, containers []*ateompb.Container) ([]actorContainer, error) {
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
@@ -638,7 +643,7 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 		// the bind into virtiofsd's shared dir, the read-only remount — then
 		// sees the composed tree, with host-side writes landing in the bundle's
 		// private upper. The guest still builds its own writable upper on top.
-		if err := imagecache.SetupBundleRootfs(bundle); err != nil {
+		if err := imagecache.SetupBundleRootfs(ctx, bundle); err != nil {
 			return nil, fmt.Errorf("while composing rootfs for %q: %w", cn, err)
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
@@ -670,6 +675,8 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
 func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, ctrs []actorContainer, containers []*ateompb.Container) (*exec.Cmd, error) {
+	ctx, span := tracer.Start(ctx, "stageMergedRootfs")
+	defer span.End()
 	upperBase := rootfsUpperDir(id)
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
@@ -862,6 +869,8 @@ func buildFsConfigs(id string) []ch.FsConfig {
 // configure guest networking (eth0 IP/MAC/MTU + routes) once, then start each
 // container on its own overlay rootfs. On failure it dumps guest diagnostics.
 func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
+	ctx, span := tracer.Start(ctx, "startActorContainers")
+	defer span.End()
 	// Establish the agent sandbox + the kataShared virtio-fs mount (every
 	// container's merged rootfs, durable volumes, CSI volumes, and system-info
 	// volumes). All containers share it, so use the first container's hostname.
@@ -909,6 +918,9 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 //
 // Its spec binds every declared volume at its mount path.
 func startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+	ctx, span := tracer.Start(ctx, "startRootfsContainer",
+		trace.WithAttributes(ateattr.ActorContainerNameKey.String(c.name)))
+	defer span.End()
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
 	cancel()
@@ -974,6 +986,8 @@ const (
 // has gone missing means the guest died. Polling on would only spend the rest
 // of the timeout to report a bare "no such file or directory".
 func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration) (*kata.AgentClient, error) {
+	ctx, span := tracer.Start(ctx, "dialAgentRetry")
+	defer span.End()
 	deadline := time.Now().Add(timeout)
 	start := time.Now()
 	var lastErr error

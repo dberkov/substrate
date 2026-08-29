@@ -27,10 +27,12 @@ import (
 	"slices"
 	"syscall"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/sizing"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type runsc struct {
@@ -40,6 +42,14 @@ type runsc struct {
 	size sizing.SandboxSize
 	// durableVolumes are the durable-dir volume names declared to the sandbox.
 	durableVolumes []string
+}
+
+// startSpan opens a child span for one runsc subcommand invocation, so a
+// lifecycle RPC's trace shows where its time went, per step and per container.
+func (r *runsc) startSpan(ctx context.Context, subcommand, containerName string) (context.Context, trace.Span) {
+	return tracer.Start(ctx, "runsc "+subcommand, trace.WithAttributes(
+		ateattr.ActorUIDKey.String(r.actorUID),
+		ateattr.ActorContainerNameKey.String(containerName)))
 }
 
 // durableVolumeNames returns the sorted, deduplicated durable-dir volume names
@@ -89,6 +99,9 @@ func (r *runsc) shapeSpec(containerName string) error {
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
+	ctx, span := r.startSpan(ctx, "create", containerName)
+	defer span.End()
+
 	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
 
 	if err := r.shapeSpec(containerName); err != nil {
@@ -135,6 +148,9 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 }
 
 func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName string) error {
+	ctx, span := r.startSpan(ctx, "start", containerName)
+	defer span.End()
+
 	slog.InfoContext(ctx, "About to run runsc start", slog.String("container", containerName))
 
 	startArgs := []string{
@@ -162,6 +178,9 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 }
 
 func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string) error {
+	ctx, span := r.startSpan(ctx, "checkpoint", containerName)
+	defer span.End()
+
 	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
 
 	cmd := exec.CommandContext(
@@ -189,6 +208,9 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 }
 
 func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string) error {
+	ctx, span := r.startSpan(ctx, "fscheckpoint", containerName)
+	defer span.End()
+
 	slog.InfoContext(ctx, "About to run runsc fscheckpoint", slog.String("container", containerName))
 
 	args := []string{
@@ -227,6 +249,9 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 // We take a checkpoint only of the root container of the sandbox, but we need
 // to call restore on each container, using the same checkpoint.
 func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error {
+	ctx, span := r.startSpan(ctx, "restore", containerName)
+	defer span.End()
+
 	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
 
 	if err := r.shapeSpec(containerName); err != nil {
@@ -266,6 +291,9 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 }
 
 func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
+	ctx, span := r.startSpan(ctx, "delete", containerName)
+	defer span.End()
+
 	// token := rand.Text()
 	// logFile := "/tmp/runsc.delete." + token + ".log"
 
@@ -292,6 +320,9 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 }
 
 func (r *runsc) cmdState(ctx context.Context, containerName string) error {
+	ctx, span := r.startSpan(ctx, "state", containerName)
+	defer span.End()
+
 	cmd := exec.CommandContext(
 		ctx,
 		r.path,
@@ -325,6 +356,9 @@ func (r *runsc) killArgs(containerName, signal string) []string {
 // cmdKill sends signal to the given container's process(es) inside the gVisor
 // sandbox. Used during graceful shutdown to propagate SIGTERM to the actor.
 func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error {
+	ctx, span := r.startSpan(ctx, "kill", containerName)
+	defer span.End()
+
 	slog.InfoContext(ctx, "About to run runsc kill", slog.String("container", containerName), slog.String("signal", signal))
 
 	cmd := exec.CommandContext(ctx, r.path, r.killArgs(containerName, signal)...)
@@ -355,6 +389,8 @@ func (r *runsc) waitArgs(containerName string) []string {
 // and an entry held that long would hold off reaping and, past MaxDefer, every
 // other runsc invocation with it.
 func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
+	ctx, span := r.startSpan(ctx, "wait", containerName)
+	defer span.End()
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
 
 	cmd := exec.CommandContext(ctx, r.path, r.waitArgs(containerName)...)

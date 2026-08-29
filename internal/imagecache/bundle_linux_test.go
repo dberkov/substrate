@@ -140,7 +140,7 @@ func TestFinalizeLayer_NoWhiteouts(t *testing.T) {
 // A bundle without an overlay spec must be left untouched.
 func TestSetupBundleRootfs_NoSpecIsNoop(t *testing.T) {
 	bundle := t.TempDir()
-	if err := SetupBundleRootfs(bundle); err != nil {
+	if err := SetupBundleRootfs(t.Context(), bundle); err != nil {
 		t.Fatalf("SetupBundleRootfs: %v", err)
 	}
 	if entries, _ := os.ReadDir(bundle); len(entries) != 0 {
@@ -155,7 +155,7 @@ func TestSetupBundleRootfs_ZeroLayers(t *testing.T) {
 	if err := WriteSpec(bundle, &OverlaySpec{Layers: nil, ExtraDirs: []string{"/run/ate"}}); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
 	}
-	if err := SetupBundleRootfs(bundle); err != nil {
+	if err := SetupBundleRootfs(t.Context(), bundle); err != nil {
 		t.Fatalf("SetupBundleRootfs: %v", err)
 	}
 	fi, err := os.Stat(filepath.Join(bundle, "rootfs", "run", "ate"))
@@ -187,7 +187,7 @@ func TestSetupBundleRootfs_ImplicitDirMetadataRepair(t *testing.T) {
 	if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{base, top}}); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
 	}
-	if err := SetupBundleRootfs(bundle); err != nil {
+	if err := SetupBundleRootfs(t.Context(), bundle); err != nil {
 		t.Fatalf("SetupBundleRootfs: %v", err)
 	}
 	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
@@ -218,7 +218,7 @@ func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
 	if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{layer}, ExtraDirs: []string{"/run/ate"}}); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
 	}
-	if err := SetupBundleRootfs(bundle); err != nil {
+	if err := SetupBundleRootfs(t.Context(), bundle); err != nil {
 		t.Fatalf("SetupBundleRootfs: %v", err)
 	}
 	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
@@ -273,7 +273,7 @@ func TestSetupBundleRootfs_ManyLayers(t *testing.T) {
 	if err := WriteSpec(bundle, &OverlaySpec{Layers: layers}); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
 	}
-	if err := SetupBundleRootfs(bundle); err != nil {
+	if err := SetupBundleRootfs(t.Context(), bundle); err != nil {
 		t.Fatalf("SetupBundleRootfs with %d layers: %v", n, err)
 	}
 	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
@@ -321,7 +321,7 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("WriteSpec: %v", err)
 			}
-			if err := SetupBundleRootfs(bundle); err != nil {
+			if err := SetupBundleRootfs(t.Context(), bundle); err != nil {
 				t.Fatalf("SetupBundleRootfs: %v", err)
 			}
 			t.Cleanup(func() { _ = UnmountAllUnder(bundle) })

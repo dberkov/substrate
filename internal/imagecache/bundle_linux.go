@@ -20,6 +20,7 @@
 package imagecache
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -27,10 +28,17 @@ import (
 	"sort"
 	"strings"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
+
+// tracer emits imagecache's child spans: rootfs composition sits on the actor
+// boot and restore critical paths, so its latency belongs in lifecycle traces.
+var tracer = otel.Tracer("imagecache")
 
 // SetupBundleRootfs composes the bundle's rootfs from cached layers per the
 // bundle's overlay spec: it finalizes each layer (whiteout materialization,
@@ -43,7 +51,12 @@ import (
 // extracted directory). The mount lives in the calling process's mount
 // namespace, which is exactly where the workload (runsc's gofer, virtiofsd)
 // resolves it.
-func SetupBundleRootfs(bundlePath string) error {
+func SetupBundleRootfs(ctx context.Context, bundlePath string) error {
+	// The bundle path's last element is the container name (see
+	// ateompath.OCIBundlePath).
+	_, span := tracer.Start(ctx, "imagecache.SetupBundleRootfs",
+		trace.WithAttributes(ateattr.ActorContainerNameKey.String(filepath.Base(bundlePath))))
+	defer span.End()
 	spec, err := ReadSpec(bundlePath)
 	if err != nil {
 		return err
