@@ -370,6 +370,11 @@ apply_gvisor_sandboxconfig() {
     echo "WARNING: gVisor asset repack failed; applying ${stock} as-is (upstream bzip2, ~20s first-touch extraction per node)" >&2
     run_kubectl apply -f "${stock}"
   fi
+  # Read back from the cluster, not from what was piped in: this is what
+  # atelet will fetch, and it catches a later apply overwriting the config.
+  echo ">> gvisor-default assets now on the cluster:"
+  run_kubectl get sandboxconfig gvisor-default \
+    -o jsonpath='{range .spec.assets.*.gvisor}{.url}{"\n"}{end}'
 }
 
 # Extract a CA pool secret's RootCertificateDER and emit it as a PEM certificate.
@@ -576,8 +581,10 @@ deploy_ate_system() {
   # Install the cluster-wide default sandbox config(s). Sandbox binaries live on
   # cluster-scoped SandboxConfigs resolved via each WorkerPool's SandboxClass
   # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
-  # they name their own SandboxConfig.
-  apply_gvisor_sandboxconfig
+  # they name their own SandboxConfig. The stock (upstream bzip2) variant here;
+  # the bundle below re-applies this same file, so the zstd-repacked variant is
+  # applied after the bundle, like apply_otel_endpoint_override.
+  run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
 
   # Ahead of the bundle below, for the same reason as the namespace: every
   # workload pulls this ConfigMap in via envFrom, and a container whose envFrom
@@ -628,6 +635,10 @@ deploy_ate_system() {
 
   # After the bundle, which carries its own copy of ate-otel-config.
   apply_otel_endpoint_override
+  # Also after the bundle, which carries its own (stock, upstream-bzip2) copy
+  # of sandboxconfig-gvisor.yaml and would otherwise overwrite the repacked
+  # variant this applies.
+  apply_gvisor_sandboxconfig
 }
 
 # Ensure secrets and configmaps required by ate-apiserver
