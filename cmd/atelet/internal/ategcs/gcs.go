@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/option"
 )
 
@@ -39,9 +41,29 @@ type gcsClient struct {
 }
 
 // NewGCSClient wraps client. opts must be the options client was built with;
-// the pool of extra connections is built from them.
+// the pool of extra connections is built from them. The client's retry policy
+// is replaced (see setRetry), so callers should not share it with code that
+// needs different retry semantics.
 func NewGCSClient(client *storage.Client, opts ...option.ClientOption) ObjectStorage {
+	setRetry(client)
 	return &gcsClient{client: client, opts: opts}
+}
+
+// setRetry makes every operation on c retry transient errors (408, 429, 5xx)
+// with backoff. The client's default RetryIdempotent policy never retries an
+// object write without a precondition, so a single 429 — routine while GCS
+// scales a cold bucket's key ranges up to a suspend burst — failed the whole
+// snapshot. RetryAlways is safe for this client because every write targets a
+// unique name (snapshot UUID directories, runID-suffixed part names) or is
+// idempotent (compose and copy from fixed sources, delete).
+func setRetry(c *storage.Client) {
+	c.SetRetry(
+		storage.WithPolicy(storage.RetryAlways),
+		// Suspend is latency-sensitive, so bound the worst case: at most 5
+		// attempts, under 5s of backoff sleep in total (250ms+500ms+1s+2s).
+		storage.WithBackoff(gax.Backoff{Initial: 250 * time.Millisecond, Max: 2 * time.Second, Multiplier: 2}),
+		storage.WithMaxAttempts(5),
+	)
 }
 
 // supportsStreamingPut is the streamingPutter marker: the GCS client's PutObject
