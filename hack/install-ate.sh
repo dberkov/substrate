@@ -635,10 +635,10 @@ deploy_ate_system() {
 
   # After the bundle, which carries its own copy of ate-otel-config.
   apply_otel_endpoint_override
-  # Also after the bundle, which carries its own (stock, upstream-bzip2) copy
-  # of sandboxconfig-gvisor.yaml and would otherwise overwrite the repacked
-  # variant this applies.
-  apply_gvisor_sandboxconfig
+  # # Also after the bundle, which carries its own (stock, upstream-bzip2) copy
+  # # of sandboxconfig-gvisor.yaml and would otherwise overwrite the repacked
+  # # variant this applies.
+  # apply_gvisor_sandboxconfig
 }
 
 # Ensure secrets and configmaps required by ate-apiserver
