@@ -90,6 +90,11 @@ type taskRuntime struct {
 // (the analog of locust's per-user on_start); subsequent calls run a
 // resume/ping/suspend cycle.
 func (r *taskRuntime) iterate() {
+	// Sleep on every return path, not just the happy one: without this a
+	// failing startUser / resume / crashed actor loops on boomer's zero-delay
+	// re-entry and hammers ate-api-server.
+	defer func() { time.Sleep(r.dynamicWait()) }()
+
 	gid := goroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
@@ -102,6 +107,12 @@ func (r *taskRuntime) iterate() {
 		val, _ = r.users.LoadOrStore(gid, u)
 	}
 	user := val.(*gluttonUser)
+
+	// A crashed actor stays crashed for this VU's lifetime: further Resume
+	// calls will keep returning Aborted and would just churn API traffic.
+	if user.crashed {
+		return
+	}
 
 	ctx := context.Background()
 	if !user.resume(ctx) {
@@ -116,8 +127,6 @@ func (r *taskRuntime) iterate() {
 	user.churnRAM(ctx)
 	user.ping(ctx)
 	user.suspend(ctx)
-
-	time.Sleep(r.dynamicWait())
 }
 
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
@@ -171,6 +180,11 @@ type gluttonUser struct {
 	firstResume  bool
 	actorRunning bool
 	ramFilled    bool
+	// crashed is set the first time ResumeActor reports the actor as
+	// ACTOR_STATE_CRASHED (codes.Aborted with "crashed" in the message).
+	// Once set, iterate() skips this user forever -- ateapi never rehabilitates
+	// a crashed actor, so retrying would just fail forever.
+	crashed bool
 }
 
 func (u *gluttonUser) ref() *ateapipb.ObjectRef {
@@ -226,6 +240,17 @@ func (u *gluttonUser) resume(ctx context.Context) bool {
 		return err
 	})
 	if err != nil {
+		// ateapi reports a crashed actor as codes.Aborted with "crashed" in
+		// the message (see workflow_resume.go). Mark the user so iterate()
+		// stops touching it, and surface a CrashCount tick so operators can
+		// see the crash total in the locust stats table.
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Aborted && strings.Contains(s.Message(), "crashed") {
+			u.crashed = true
+			bmetrics.RecordFailure("actor", "CrashCount", userClass, 0, "actor entered ACTOR_STATE_CRASHED")
+			slog.Warn("glutton actor crashed; will stop sending requests",
+				slog.String("actor", u.actorName),
+				slog.String("err", err.Error()))
+		}
 		return false
 	}
 	u.firstResume = false
