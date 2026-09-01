@@ -305,6 +305,26 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         TYPES[ttype].validate(t)
 
 
+def _override_ate_arg(ate_args: list[str], flag: str, value: str) -> list[str]:
+    """Drop every prior occurrence of ``flag`` (both ``--flag=x`` and
+    ``--flag x`` forms) from ``ate_args`` and append ``flag=value``, so
+    the override always wins over whatever tests.yaml supplied."""
+    out: list[str] = []
+    skip_next = False
+    for a in ate_args:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == flag:
+            skip_next = True
+            continue
+        if a.startswith(flag + "="):
+            continue
+        out.append(a)
+    out.append(f"{flag}={value}")
+    return out
+
+
 def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
     run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)])
 
@@ -524,7 +544,13 @@ def main() -> None:
             failure_msg = None
             start_time = time.time()
             try:
-                deploy_substrate(test.get("ateArgs", []))
+                ate_args = list(test.get("ateArgs", []))
+                # TODO TEMPORARY: force more signer workers regardless of what
+                # tests.yaml supplied. Remove once tests.yaml carries the value.
+                ate_args = _override_ate_arg(
+                    ate_args, "--podcert-workers-per-signer", "30"
+                )
+                deploy_substrate(ate_args)
                 TYPES[ttype].pre_test(test)
                 # install-microvm-deps needs the CRDs from deploy_substrate;
                 # deploy_workloads needs the microvm SandboxConfig.
