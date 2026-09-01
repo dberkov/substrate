@@ -550,6 +550,13 @@ def main() -> None:
                 ate_args = _override_ate_arg(
                     ate_args, "--podcert-workers-per-signer", "30"
                 )
+                # 10k-scale runs need the tuned large postgres profile; the
+                # default max_connections=100 caps ate-api-server well below
+                # the load these tests generate.
+                if "10k" in test["name"]:
+                    ate_args = _override_ate_arg(
+                        ate_args, "--postgres-size", "large"
+                    )
                 deploy_substrate(ate_args)
                 TYPES[ttype].pre_test(test)
                 # install-microvm-deps needs the CRDs from deploy_substrate;
