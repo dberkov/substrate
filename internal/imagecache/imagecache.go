@@ -96,6 +96,45 @@ const (
 	layerPullConcurrency = 4
 )
 
+// Pull retry backoffs, chosen per registry by retryBackoffFor. Both replace
+// go-containerregistry's default (3 attempts over ~4s, jitter 0.1), which is
+// tuned for a single flaky client, and both apply to every request of a pull,
+// including the /v2/ auth ping. The retryable status codes stay at the
+// library default, which already includes 429. Vars so tests can shrink the
+// waits.
+var (
+	// gcpRetryBackoff covers GCP registries (gcr.io / pkg.dev): pulls there
+	// are served from the project's own quota and sit on the Run/Restore
+	// critical path, so retries stay short — enough to ride out a blip,
+	// quick enough to surface a real outage to the RPC-level retry.
+	gcpRetryBackoff = remote.Backoff{
+		Duration: 500 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   1.0,
+		Steps:    3,
+		Cap:      5 * time.Second,
+	}
+	// publicRetryBackoff covers everything else (e.g. registry.k8s.io),
+	// where pulls are anonymous and rate limits are shared: a whole fleet
+	// can be throttled at once, so retries must outlast the throttling wave
+	// and full jitter must de-synchronize the herd rather than replay it.
+	publicRetryBackoff = remote.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+		Jitter:   1.0,
+		Steps:    4,
+		Cap:      10 * time.Second,
+	}
+)
+
+// retryBackoffFor picks the pull retry backoff for a registry host.
+func retryBackoffFor(registry string) remote.Backoff {
+	if registryUsesGCPAuth(registry) {
+		return gcpRetryBackoff
+	}
+	return publicRetryBackoff
+}
+
 // Store is atelet's handle to the on-disk layer pool. It is safe for
 // concurrent use; concurrent pulls of the same image or layer are collapsed.
 // The store assumes it is the only writer on the node (one atelet per node).
@@ -672,14 +711,15 @@ func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference) []remo
 	if s.platform != nil {
 		platform = *s.platform
 	}
+	registry := parsedRef.Context().Registry.RegistryStr()
 	opts := []remote.Option{
 		// Propagate caller ctx into go-containerregistry so cancellation tears
 		// down in-flight layer-blob HTTP requests instead of letting them run
 		// to completion in background goroutines.
 		remote.WithContext(ctx),
 		remote.WithPlatform(platform),
+		remote.WithRetryBackoff(retryBackoffFor(registry)),
 	}
-	registry := parsedRef.Context().Registry.RegistryStr()
 	if s.authenticator != nil && registryUsesGCPAuth(registry) {
 		opts = append(opts, remote.WithAuth(s.authenticator))
 	}
