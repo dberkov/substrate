@@ -80,6 +80,22 @@ var (
 		"Number of concurrent worker goroutines per signer.",
 	)
 
+	// client-go defaults to QPS=5/Burst=10, which caps issuance at a few
+	// PodCertificateRequests per second no matter how many workers run: a
+	// large rollout then blocks on volume mounts for minutes to hours. The
+	// limiter is shared by every worker of both signers, so it must be sized
+	// for the whole process.
+	kubeAPIQPS = pflag.Float32(
+		"kube-api-qps",
+		100,
+		"Sustained queries per second allowed against the Kubernetes API.",
+	)
+	kubeAPIBurst = pflag.Int(
+		"kube-api-burst",
+		200,
+		"Burst queries allowed against the Kubernetes API.",
+	)
+
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
@@ -109,6 +125,14 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	if *kubeAPIQPS <= 0 || *kubeAPIBurst <= 0 {
+		slog.ErrorContext(ctx, "Invalid rate limits: --kube-api-qps and --kube-api-burst must be positive",
+			slog.Any("kube-api-qps", *kubeAPIQPS), slog.Int("kube-api-burst", *kubeAPIBurst))
+		os.Exit(1)
+	}
+	kconfig.QPS = *kubeAPIQPS
+	kconfig.Burst = *kubeAPIBurst
 
 	kc, err := kubernetes.NewForConfig(kconfig)
 	if err != nil {
