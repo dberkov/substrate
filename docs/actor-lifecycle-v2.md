@@ -64,11 +64,12 @@ flowchart TD
 `suspend` takes two optional deadlines, one per guarantee boundary of the ladder:
 
 ```
-suspend [--local-by=<duration>] [--durable-by=<duration>]
+suspend [--local-by=<duration>] [--durable-by=<duration>] [--detach]
 ```
 
 * `--local-by` — memory + files must be packaged (**reboot-survivable**) no later than this long after the suspend.
 * `--durable-by` — the packaged files (rootfs delta + volumes) must be uploaded (**node-loss-survivable**) no later than this; memory upload remains an optional accelerator, per system policy.
+* `--detach` — once durability is reached, evacuate the worker entirely: release local copies and node attachments, leaving the actor SUSPENDED UNASSIGNED, resumable anywhere. Implies immediate durability for every layer the fidelity floor protects (see **Detach** below).
 * `0` means immediately (the work starts now at full priority; the call still returns at once — arrival of each guarantee is observable in status as `localBy`/`durableBy` and their conditions). Unset means platform-default escalation. `local-by` must be ≤ `durable-by`; if only `durable-by` is given, packaging is scheduled in time to meet it.
 
 Deadlines are ceilings on the system's laziness, never floors on its speed: node pressure, drain, or policy may move an actor up the ladder long before its deadline — the flag only bounds how late a guarantee may arrive. And a deadline governs scheduling effort, not physics: a node lost before the deadline is governed by the fidelity floor, and status shows whether the deadline was met.
@@ -90,7 +91,17 @@ Orthogonal to the deadlines, two background forces act on every Suspended actor,
 
 **Degradation removes copies.** Concurrently, circumstances on the machine may destroy some copies, making the actor's next resume more costly: heavy memory pressure may force killing a paused process; heavy disk pressure may force deleting stored artifacts. The system degrades with the **lowest impact first** — kill processes whose memory is already packaged before those whose memory is not; delete local artifacts already uploaded before those that are not — and among equal-impact candidates, the coldest actors go first. Degradation never deletes the last copy of a layer protected by minimumResumeFidelity; where a failure leaves no choice, that is a Crashed transition, not a policy decision.
 
-**Assignment.** Any actor with some local state on a worker — a paused process, packaged artifacts, or lingering cache — is **assigned** to that worker, and scheduling tries to resume assigned actors on the worker they are assigned to. When that is not possible (the worker is full, gone, or the local state has degraded past usefulness), the actor is unassigned and reassigned to another worker, resuming there from the best copies reachable — durable artifacts, or a cold boot per the contract.
+**Assignment and attachment.** Any actor with some local state on a worker is **assigned** to that worker, and scheduling tries to resume assigned actors on the worker they are assigned to; assignment is visible in status. The local state comes in two kinds with very different gravity:
+* **Cached copies (soft).** The paused process, packaged artifacts, lingering cache. Their only value is a faster resume: the degrade loop may destroy them unilaterally, and losing them costs nothing but warmth. The scheduler treats them as a *preference*.
+* **Attachments (hard).** Node-bound resources that are the only instance, not a copy — an external volume attached to the node VM, a block device serving as the snapshot store, network identity. An attached actor *cannot* resume anywhere else until the attachment is released, and releasing takes real time (a cloud volume detach is seconds, not milliseconds). The scheduler treats attachments as a *constraint*. **Degradation may destroy any cached copy; it may never silently break an attachment — attachments change hands only through an explicit detach.**
+
+**Detach.** Detaching releases any actor’s artifact from the node. In order: everything the fidelity floor protects is made durable (files always; memory too when the floor is `memory`); local artifacts and cache are deleted; attachments are released; the actor becomes SUSPENDED UNASSIGNED — resumable anywhere, from durable copies. Four triggers:
+1. **The terminal rung of escalation** — after long idle, per platform TTL. This is what eventually moves any suspended actor to UNASSIGNED.
+2. **Node drain** — force-runs the ladder to this end state for every assigned actor.
+3. **A resume that cannot be placed on the assigned worker** — detach, reschedule, attach elsewhere; the detach latency lands inside that resume.
+4. **Explicitly, `suspend --detach`** — for callers who know the actor will not return soon and want node-bound resources freed deterministically rather than by TTL.
+
+A detach in progress is observable in status, alongside the assigned/unassigned distinction.
 
 The actor-level lifecycle, with the layer mechanics kept in the text above:
 
