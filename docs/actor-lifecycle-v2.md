@@ -31,9 +31,9 @@ spec:
     minimumResumeFidelity: volumes | rootfs | memory
 ```
 
-**Example 1**: Suppose an actor sets minimumResumeFidelity = memory.  If we must invalidate the memory snapshot, for any reason, that actor is CRASHED.
+**Example 1**: Suppose an actor sets minimumResumeFidelity = memory.  If we must invalidate the memory snapshot, for any reason, that actor is Crashed (see the lifecycle section).
 
-**Example 2**: Suppose an actor sets minimumResumeFidelity = rootfs.  If we must invalidate the memory snapshot, the actor can run a cold-start on the next wakeup, but if we must invalidate the rootfs, that actor is CRASHED.
+**Example 2**: Suppose an actor sets minimumResumeFidelity = rootfs.  If we must invalidate the memory snapshot, the actor can run a cold-start on the next wakeup, but if we must invalidate the rootfs, that actor is Crashed.
 
 
 ### Snapshot layers with compatibility keys. 
@@ -42,7 +42,7 @@ A snapshot consists of three distinct layers, where rootfs delta and volumes ope
 * rootfs delta
 * volumes
 
-Each layer is “stamped” at capture with what it depends on (image digest, sandbox runtime version, CPU class, guest kernel). When scheduling a wakeup, we try to pick a destination that matches as much as possible.  When resuming, every layer whose stamp matches the target is reused; a mismatched layer and higher are skipped, and the resume degrades gracefully from fully warm down to plain cold boot. Template upgrades, sandboxClass upgrades (ex:gVisor version), and CPU changes are not special cases - each is just a stamp mismatch. One law, **the observation rule**, governs combining layers: memory may only sit on filesystem state it had observed at capture time.
+Each layer is “stamped” at capture with what it depends on (image digest, sandbox runtime version, CPU features set, guest kernel). When scheduling a wakeup, we try to pick a destination that matches as much as possible.  When resuming, every layer whose stamp matches the target is reused; a mismatched layer is skipped, along with every layer that depends on it (memory depends on both others), and the resume degrades gracefully from fully warm down to plain cold boot. Template upgrades, sandboxClass upgrades (ex:gVisor version), and CPU changes are not special cases - each is just a stamp mismatch. One law, **the observation rule**, governs combining layers: memory may only sit on filesystem state it had observed at capture time.
 
 ```mermaid
 flowchart TD
@@ -55,7 +55,7 @@ flowchart TD
     D -- yes --> F["full&nbsp;warm&nbsp;resume:<br/>memory&nbsp;+&nbsp;rootfs&nbsp;delta&nbsp;+&nbsp;volumes"]
 ```
 
-### One-verb lifecycle
+### Suspend/resume lifecycle
 `suspend` and `resume` are the whole lifecycle: an actor is **Running**, **Suspended**, or **Crashed**. An actor moves to *Crashed* when something fails underneath it — the node or sandbox dies while it is Running — or when a layer protected by its minimumResumeFidelity is lost. It is the *layers* that transition: on suspend, each layer climbs the rungs **resident → local → durable** independently, and the actor's state never changes while they do. The rungs form a pure survivability ladder:
 * **resident** — the state sits in place inside the paused sandbox (memory in RAM, files on the sandbox's own disks), unpackaged; it does not survive a node restart as usable state. 
 * **local** — the state has been *packaged* into a snapshot on node disk; **survives node restart**.
@@ -69,8 +69,8 @@ suspend [--local-by=<duration>] [--durable-by=<duration>] [--detach]
 
 * `--local-by` — memory + files must be packaged (**reboot-survivable**) no later than this long after the suspend.
 * `--durable-by` — the packaged files (rootfs delta + volumes) must be uploaded (**node-loss-survivable**) no later than this; memory upload remains an optional accelerator, per system policy.
-* `--detach` — once durability is reached, evacuate the worker entirely: release local copies and node attachments, leaving the actor SUSPENDED UNASSIGNED, resumable anywhere. Implies immediate durability for every layer the fidelity floor protects (see **Detach** below).
-* `0` means immediately (the work starts now at full priority; the call still returns at once — arrival of each guarantee is observable in status as `localBy`/`durableBy` and their conditions). Unset means platform-default escalation. `local-by` must be ≤ `durable-by`; if only `durable-by` is given, packaging is scheduled in time to meet it.
+* For the duration flags, `0` means immediately (the work starts now at full priority; the call still returns at once — arrival of each guarantee is observable in status as `localBy`/`durableBy` and their conditions). Unset means platform-default escalation. `local-by` must be ≤ `durable-by`; if only `durable-by` is given, packaging is scheduled in time to meet it.
+* `--detach` — once durability is reached, evacuate the worker entirely: release local copies and node attachments, leaving the actor Suspended and unassigned, resumable anywhere. Implies immediate durability for every layer the fidelity floor protects (see **Detach** below).
 
 Deadlines are ceilings on the system's laziness, never floors on its speed: node pressure, drain, or policy may move an actor up the ladder long before its deadline — the flag only bounds how late a guarantee may arrive. And a deadline governs scheduling effort, not physics: a node lost before the deadline is governed by the fidelity floor, and status shows whether the deadline was met.
 
@@ -95,8 +95,8 @@ Orthogonal to the deadlines, two background forces act on every Suspended actor,
 * **Cached copies (soft).** The paused process, packaged artifacts, lingering cache. Their only value is a faster resume: the degrade loop may destroy them unilaterally, and losing them costs nothing but warmth. The scheduler treats them as a *preference*.
 * **Attachments (hard).** Node-bound resources that are the only instance, not a copy — an external volume attached to the node VM, a block device serving as the snapshot store, network identity. An attached actor *cannot* resume anywhere else until the attachment is released, and releasing takes real time (a cloud volume detach is seconds, not milliseconds). The scheduler treats attachments as a *constraint*. **Degradation may destroy any cached copy; it may never silently break an attachment — attachments change hands only through an explicit detach.**
 
-**Detach.** Detaching releases any actor’s artifact from the node. In order: everything the fidelity floor protects is made durable (files always; memory too when the floor is `memory`); local artifacts and cache are deleted; attachments are released; the actor becomes SUSPENDED UNASSIGNED — resumable anywhere, from durable copies. Four triggers:
-1. **The terminal rung of escalation** — after long idle, per platform TTL. This is what eventually moves any suspended actor to UNASSIGNED.
+**Detach.** Detaching releases all of an actor’s artifacts and attachments from the node. In order: everything the fidelity floor protects is made durable (files always; memory too when the floor is `memory`), and memory is additionally uploaded when a warm resume elsewhere is the goal and policy deems it worth the bytes; local artifacts and cache are deleted; attachments are released; the actor becomes Suspended and unassigned — resumable anywhere, from durable copies. Four triggers:
+1. **The terminal rung of escalation** — after long idle, per platform TTL. This is what eventually moves any suspended actor to unassigned.
 2. **Node drain** — force-runs the ladder to this end state for every assigned actor.
 3. **A resume that cannot be placed on the assigned worker** — detach, reschedule, attach elsewhere; the detach latency lands inside that resume.
 4. **Explicitly, `suspend --detach`** — for callers who know the actor will not return soon and want node-bound resources freed deterministically rather than by TTL.
@@ -115,7 +115,9 @@ flowchart LR
     SA["SUSPENDED<br/>ASSIGNED"]
 
     %% invisible spine: pins SU to the far left, SA to the far right
-    SU ~~~ ST ~~~ RN ~~~ SA
+    SU ~~~ ST
+    ST ~~~ RN
+    RN ~~~ SA
 
     SU -- "resume: schedule to worker,<br/>attach volumes" --> ST
     ST -- "resume from<br/>durable snapshot" --> RN
@@ -148,9 +150,10 @@ Solid arrows are escalation (durability events); dotted arrows are degradation, 
 
 The two escalation moves - killing the paused process and uploading - are independent, so either may happen first; uploads are paced by a background NIC budget. A resume cancels escalation at whatever state it reached: the actor restarts from the best copies available. The `suspend` call always returns immediately; durability is observable as a condition.
 
-**Failures are transforms on these states, not extra edges.** A node reboot kills the paused process and erases every *resident* copy — packaged local copies survive. A node loss erases every *resident* and *local* copy — only durable copies survive. If the surviving copies still satisfy the actor's minimumResumeFidelity, the actor simply continues from a worse state: resume reassembles the survivors, no special handling needed. If a protected layer lost its last copy, the actor is **CRASHED**. Two examples, in words:
+**Failures are transforms on these states, not extra edges.** A node reboot kills the paused process and erases every *resident* copy — packaged local copies survive. A node loss erases every *resident* and *local* copy — only durable copies survive. If the surviving copies still satisfy the actor's minimumResumeFidelity, the actor simply continues from a worse state: resume reassembles the survivors, no special handling needed. If a protected layer lost its last copy, the actor is **Crashed**. Three examples, in words:
 * An actor suspended with memory and files both packaged and uploaded — process paused, local and durable copies of both layers — survives even a node loss: it comes back as "process killed, only the durable copies remain" and resumes warm from GCS. 
-* An actor suspended with no deadlines — paused in place, nothing packaged — survives neither a reboot nor a node loss; that exposure is exactly what the deadlines (and the platform's default escalation timers) exist to bound. And a crash underneath a *Running* actor leaves only dirty files, so it always moves the actor to CRASHED.
+* An actor suspended with no deadlines — paused in place, nothing packaged — survives neither a reboot nor a node loss; that exposure is exactly what the deadlines (and the platform's default escalation timers) exist to bound.
+* A crash underneath a *Running* actor leaves only dirty files, so it always moves the actor to Crashed.
 
 
 ### Multi-hardware support
