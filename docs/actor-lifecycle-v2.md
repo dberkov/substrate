@@ -1,4 +1,4 @@
-# [Design] Actor lifecycle v2: one stop verb, layered snapshots, and the cold-boot contract
+# [Design] Actor lifecycle v2: suspend/resume, layered snapshots, and the cold-boot contract
 
 Replaces the design in #119. Related: #798 (opt-in durability), #451 / #683 (golden memory + durable data), #690 (snapshot/file cache), #660.
 
@@ -54,7 +54,7 @@ flowchart TD
 ```
 
 ### One-verb lifecycle
-`suspend` and `resume` are the whole lifecycle: an actor is either **Running** or **Suspended** - nothing else. It is the *layers* that transition: on suspend, each layer climbs the rungs **resident → local → durable** independently, and the actor's state never changes while they do. `suspend` takes one parameter - an SLO naming the floor each layer must reach promptly:
+`suspend` and `resume` are the whole lifecycle: an actor is **Running**, **Suspended**, or **Crashed**. An actor moves to *Crashed* when something fails underneath it — the node or sandbox dies while it is Running — or when a layer protected by its minimumResumeFidelity is lost. It is the *layers* that transition: on suspend, each layer climbs the rungs **resident → local → durable** independently, and the actor's state never changes while they do. `suspend` takes one parameter - an SLO naming the floor each layer must reach promptly:
 * **durable** - files (rootfs delta + volumes) uploaded to durable storage; memory is an optional accelerator, persisted per system policy. **Survives node loss**.
 * **local** - memory + files captured to node disk. **Survives node reboot**, fully warm.
 * **minimal** — files on node disk only; memory stays resident. **Survives node reboot** with files; recoverable by cold boot.
@@ -70,55 +70,69 @@ flowchart TD
 S["suspend<br/>--slo"]
 S -- "minimal" --> I_P_R_L
 S -- "local" --> I_P_RL_L
-S -- "durable" --> I_P_RLD_LD
+S -- "durable<br/>(memory persisted)" --> I_P_RLD_LD
+S -- "durable<br/>(memory not requested)" --> I_P_R_LD
 
-%% IDLE | process:paused | memory:resident | files:local
-I_P_R_L["IDLE<br/>process:&nbsp;paused<br/>memory:&nbsp;resident<br/>files:&nbsp;local"]
+%% SUSPENDED | process:paused | memory:resident | files:local
+I_P_R_L["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident<br/>files:&nbsp;local"]
 I_P_R_L -- "TTL (dump memory)" --> I_P_RL_L
 I_P_R_L -- "RAM pressure; kill process" --> I_K_L_L
 I_P_R_L -- "warm resume" --> R1
 I_P_R_L -- "kill process, upload files to GCS, cold boot" --> R2
 
 
-%% IDLE | process:paused | memory:resident,local | files:local
-I_P_RL_L["IDLE<br/>process:&nbsp;paused<br/>memory:&nbsp;resident,local<br/>files:&nbsp;local"]
+%% SUSPENDED | process:paused | memory:resident,local | files:local
+I_P_RL_L["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident,local<br/>files:&nbsp;local"]
 I_P_RL_L -- "TTL (upload to durable)" --> I_P_RLD_LD
+I_P_RL_L -- "RAM pressure; kill process" --> I_K_ML_L
 I_P_RL_L -- "warm resume" --> R1
 I_P_RL_L -- "kill process, upload files to GCS, warm resume" --> R2
 
-%% IDLE | process:killed | memory:lost | files:local
-I_K_L_L["IDLE<br/>process:&nbsp;killed<br/>memory:&nbsp;lost<br/>files:&nbsp;local"]
+%% SUSPENDED | process:killed | memory:local | files:local
+I_K_ML_L["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;local<br/>files:&nbsp;local"]
+I_K_ML_L -- "TTL (upload to durable)" --> I_K_LD_LD
+I_K_ML_L -- "warm resume" --> R1
+I_K_ML_L -- "upload to GCS, warm resume" --> R2
+
+%% SUSPENDED | process:killed | memory:lost | files:local
+I_K_L_L["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;lost<br/>files:&nbsp;local"]
 I_K_L_L -- "TTL (upload to durable)" --> I_K_L_LD
 I_K_L_L -- "cold boot" --> R1
 I_K_L_L -- "upload files to GCS, cold boot" --> R2
 
 
-%% IDLE | process:killed | memory:lost | files:local,durable
-I_K_L_LD["IDLE<br/>process:&nbsp;killed<br/>memory:&nbsp;lost<br/>files:&nbsp;local,durable"]
+%% SUSPENDED | process:killed | memory:lost | files:local,durable
+I_K_L_LD["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;lost<br/>files:&nbsp;local,durable"]
 I_K_L_LD -- "cold boot" --> R1
 I_K_L_LD -- "cold boot from GCS" --> R2
 I_K_L_LD -- "Local garbage collector" --> I_N_N_D
 
-%% IDLE | process:paused | memory:residenet,local,durable | files:local,durable
-I_P_RLD_LD["IDLE<br/>process:&nbsp;paused<br/>memory:&nbsp;resident,local,durable<br/>files:&nbsp;local,durable"]
+%% SUSPENDED | process:paused | memory:resident | files:local,durable
+I_P_R_LD["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident<br/>files:&nbsp;local,durable"]
+I_P_R_LD -- "RAM pressure; kill process" --> I_K_L_LD
+I_P_R_LD -- "warm resume" --> R1
+I_P_R_LD -- "kill process, cold boot from GCS" --> R2
+
+%% SUSPENDED | process:paused | memory:residenet,local,durable | files:local,durable
+I_P_RLD_LD["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident,local,durable<br/>files:&nbsp;local,durable"]
 I_P_RLD_LD -- "RAM pressure;kill process" --> I_K_LD_LD
 I_P_RLD_LD -- "warm resume" --> R1
 I_P_RLD_LD -- "kill process, warm resume from GCS" --> R2
 
 
-%% IDLE | process:killed | memory:local,durable | files:local,durable
-I_K_LD_LD["IDLE<br/>process:&nbsp;killed<br/>memory:&nbsp;local,durable<br/>files:&nbsp;local,durable"]
+%% SUSPENDED | process:killed | memory:local,durable | files:local,durable
+I_K_LD_LD["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;local,durable<br/>files:&nbsp;local,durable"]
 I_K_LD_LD -- "warm resume" --> R1
 I_K_LD_LD -- "warm resume from GCS" --> R2
 I_K_LD_LD -- "Local garbage collector" --> I_N_D_D
 
 
-%% IDLE | process:none | memory:durable | files:durable
-I_N_D_D["IDLE<br/>process:&nbsp;killed<br/>memory:&nbsp;durable<br/>files:&nbsp;durable"]
+%% SUSPENDED | process:none | memory:durable | files:durable
+I_N_D_D["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;durable<br/>files:&nbsp;durable"]
 I_N_D_D -- "warm resume from GCS" --> R2
 
-%% IDLE | process:none | memory:none | files:durable
-I_N_N_D["IDLE<br/>process:&nbsp;killed<br/>memory:&nbsp;durable<br/>files:&nbsp;durable"]
+%% SUSPENDED | process:none | memory:none | files:durable
+I_N_N_D["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;none<br/>files:&nbsp;durable"]
 I_N_N_D -- "cold boot from GCS" --> R2
 
 
@@ -129,7 +143,7 @@ R1["RUNNING<br/>original&nbsp;vm"]
 R2["RUNNING<br/>different&nbsp;vm"]
 ```
 
-The two escalation moves - killing the frozen process and uploading - are independent, so either may happen first; uploads are paced by a background NIC budget. Under pressure the coldest actors go first, and the memory of a killed frozen sandbox is captured to disk - or discarded where the fidelity floor permits. A resume cancels escalation at whatever state it reached: the actor restarts from the best copies available. The call always returns immediately; durability is observable as a condition. Crash recovery needs no special state: a crash merely destroys some layers' cheapest copies, and resume reassembles the best consistent set that survived.
+The two escalation moves - killing the frozen process and uploading - are independent, so either may happen first; uploads are paced by a background NIC budget. Under pressure the coldest actors go first, and the memory of a killed frozen sandbox is captured to disk - or discarded where the fidelity floor permits. A resume cancels escalation at whatever state it reached: the actor restarts from the best copies available. The call always returns immediately; durability is observable as a condition. A node crash under a *Suspended* actor usually needs no special handling: it merely destroys some layers' cheapest copies, and resume reassembles the best consistent set that survived. A crash underneath a *Running* actor, or a loss that reaches a layer protected by minimumResumeFidelity, moves the actor to *Crashed*.
 
 
 ### Multi-hardware support
