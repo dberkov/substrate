@@ -66,92 +66,63 @@ flowchart TD
 * **local** — memory + files are packaged into a snapshot on node disk. **Survives node reboot**, fully warm.
 * **durable** — the packaged files (rootfs delta + volumes) are uploaded to durable storage; memory is an optional accelerator, persisted per system policy. **Survives node loss**.
 
-At every level, the memory + files *pair* reproduces the paused state exactly — the dirty page cache the guest had not yet written back travels inside the memory layer. Packaged files used *alone* (a cold boot, or recovery after the memory layer is lost) are crash-consistent, per the cold-boot contract.
-
-**Resident vs local — packaging.** *Packaging* is the act of making state survive a restart: producing a consumable snapshot artifact on node disk. Unpackaging at resume also takes real time — which is why resident and local are separate rungs. The cost of packaging differs sharply per layer:
+**Resident vs local — packaging.** *Packaging* is the act of making state survive a restart: producing a consumable snapshot artifact on node disk. The cost of packaging differs sharply per layer:
 * **Files** are cheap to package, with a per-runtime difference. For microVMs the rootfs delta and volumes are host-file-backed block devices — the bytes are already on disk, so packaging is repositioning the files plus a host-side fsync (forcing the host's cached writes to physical disk — an operation on the host page cache that never touches the paused process, swapped out or not). For gVisor the bytes are on disk as sandbox-internal raw-page files; packaging rewrites them into consumable form using the page mapping. The mapping is written to disk at pause time (a cheap, small write the gVisor team proposed), so this rewrite manipulates local files only — it never needs the sandbox's memory either.
 * **Memory** is the expensive layer to package: every page must be materialized to be written out, and pages the kernel swapped out while the process sat paused must first be brought back in. The cost grows with time-spent-paused and peaks under RAM pressure — so escalation policy dumps memory early (by TTL, while pages are still resident) or not at all, and under heavy pressure prefers to **package the files and discard the memory** where the fidelity floor permits: the actor loses warmth, the node avoids swap-in I/O it cannot afford, and the files still reach restart-survivability.
 
-In both runtimes, whatever the guest had not yet flushed stays in the memory layer — the memory + files pair is exact, and packaged files-alone are crash-consistent. A guest-level "flush everything" would require running the guest or reading its memory, and buys no logical consistency anyway, so the design never requires one. (A microVM's in-place backing files may happen to be salvageable after a reboot; best-effort, dirty-grade salvage, never a contract.)
 
-Orthogonal to the SLO, at every level: the frozen process is kept alive as long as node pressure allows (the fastest possible resume), local files linger as cache even after upload, and a background escalation engine moves layers up the ladder over time — eventually killing the frozen process, uploading layers to durable disk and deleting locally saved files. The SLO sets where layers start; escalation only ever moves them up.
+Orthogonal to the SLO, two background forces act on every Suspended actor, in opposite directions:
 
-What drives escalation:
+**Escalation adds copies.** Within a machine, suspended actors are automatically moved along the durability ladder. The SLO defines where an actor *starts*; the system tries to do better than that when it can. An actor suspended `minimal` may have its memory and files packaged in the background, so that it would survive a node reboot; those artifacts may then be uploaded, again in the background, so that it could be resumed on another machine. Local copies linger as cache even after upload, and the paused process is kept alive as long as node pressure allows — the fastest possible resume.
+
+**Degradation removes copies.** Concurrently, circumstances on the machine may destroy some copies, making the actor's next resume more costly: heavy memory pressure may force killing a paused process; heavy disk pressure may force deleting stored artifacts. The system degrades with the **lowest impact first** — kill processes whose memory is already packaged before those whose memory is not; delete local artifacts already uploaded before those that are not — and among equal-impact candidates, the coldest actors go first. Degradation never deletes the last copy of a layer protected by minimumResumeFidelity; where a failure leaves no choice, that is a Crashed transition, not a policy decision.
+
+**Assignment.** Any actor with some local state on a worker — a paused process, packaged artifacts, or lingering cache — is **assigned** to that worker, and scheduling tries to resume assigned actors on the worker they are assigned to. When that is not possible (the worker is full, gone, or the local state has degraded past usefulness), the actor is unassigned and reassigned to another worker, resuming there from the best copies reachable — durable artifacts, or a cold boot per the contract.
+
+The actor-level lifecycle, with the layer mechanics kept in the text above:
+
 ```mermaid
-flowchart TD 
+flowchart LR
+    %% nodes declared in desired left-to-right order
+    SU["SUSPENDED<br/>UNASSIGNED"]
+    ST["STARTING"]
+    RN["RUNNING"]
+    CR["CRASHED"]
+    SA["SUSPENDED<br/>ASSIGNED"]
 
-S["suspend<br/>--slo"]
-S -- "minimal" --> S_P_R_R
-S -- "local" --> S_P_RL_RL
-S -- "durable<br/>(memory persisted)" --> S_P_RLD_RLD
-S -- "durable<br/>(memory not requested)" --> S_P_R_RLD
+    %% invisible spine: pins SU to the far left, SA to the far right
+    SU ~~~ ST ~~~ RN ~~~ SA
 
-%% S_P_R_R: paused | memory:resident | files:resident — nothing packaged
-S_P_R_R["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident<br/>files:&nbsp;resident"]
-S_P_R_R -- "TTL: package memory + files" --> S_P_RL_RL
-S_P_R_R -- "RAM pressure: package files,<br/>kill process, discard memory" --> S_K_N_L
-S_P_R_R -- "instant warm resume (unfreeze)" --> R1
-S_P_R_R -- "package files, upload to GCS,<br/>kill process, cold boot" --> R2
-
-%% S_P_RL_RL: paused | memory:resident,local | files:resident,local
-S_P_RL_RL["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident,local<br/>files:&nbsp;resident,local"]
-S_P_RL_RL -- "TTL: upload to durable" --> S_P_RLD_RLD
-S_P_RL_RL -- "RAM pressure: kill process" --> S_K_L_L
-S_P_RL_RL -- "instant warm resume (unfreeze)" --> R1
-S_P_RL_RL -- "upload to GCS, kill process,<br/>warm resume" --> R2
-
-%% S_K_L_L: killed | memory:local | files:local
-S_K_L_L["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;local<br/>files:&nbsp;local"]
-S_K_L_L -- "TTL: upload to durable" --> S_K_LD_LD
-S_K_L_L -- "warm resume" --> R1
-S_K_L_L -- "upload to GCS, warm resume" --> R2
-
-%% S_K_N_L: killed | memory:none | files:local
-S_K_N_L["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;none<br/>files:&nbsp;local"]
-S_K_N_L -- "TTL: upload to durable" --> S_K_N_LD
-S_K_N_L -- "cold boot" --> R1
-S_K_N_L -- "upload files to GCS, cold boot" --> R2
-
-%% S_K_N_LD: killed | memory:none | files:local,durable
-S_K_N_LD["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;none<br/>files:&nbsp;local,durable"]
-S_K_N_LD -- "cold boot" --> R1
-S_K_N_LD -- "cold boot from GCS" --> R2
-S_K_N_LD -- "local garbage collector" --> S_K_N_D
-
-%% S_P_R_RLD: paused | memory:resident | files:resident,local,durable
-S_P_R_RLD["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident<br/>files:&nbsp;resident,local,durable"]
-S_P_R_RLD -- "RAM pressure: kill process,<br/>discard memory" --> S_K_N_LD
-S_P_R_RLD -- "instant warm resume (unfreeze)" --> R1
-S_P_R_RLD -- "kill process, cold boot from GCS" --> R2
-
-%% S_P_RLD_RLD: paused | memory:resident,local,durable | files:resident,local,durable
-S_P_RLD_RLD["SUSPENDED<br/>process:&nbsp;paused<br/>memory:&nbsp;resident,local,durable<br/>files:&nbsp;resident,local,durable"]
-S_P_RLD_RLD -- "RAM pressure: kill process" --> S_K_LD_LD
-S_P_RLD_RLD -- "instant warm resume (unfreeze)" --> R1
-S_P_RLD_RLD -- "kill process, warm resume from GCS" --> R2
-
-%% S_K_LD_LD: killed | memory:local,durable | files:local,durable
-S_K_LD_LD["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;local,durable<br/>files:&nbsp;local,durable"]
-S_K_LD_LD -- "warm resume" --> R1
-S_K_LD_LD -- "warm resume from GCS" --> R2
-S_K_LD_LD -- "local garbage collector" --> S_K_D_D
-
-%% S_K_D_D: killed | memory:durable | files:durable
-S_K_D_D["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;durable<br/>files:&nbsp;durable"]
-S_K_D_D -- "warm resume from GCS" --> R2
-
-%% S_K_N_D: killed | memory:none | files:durable
-S_K_N_D["SUSPENDED<br/>process:&nbsp;killed<br/>memory:&nbsp;none<br/>files:&nbsp;durable"]
-S_K_N_D -- "cold boot from GCS" --> R2
-
-%% RUNNING on the machine that held the suspended state
-R1["RUNNING<br/>original&nbsp;vm"]
-
-%% RUNNING on a different machine
-R2["RUNNING<br/>different&nbsp;vm"]
+    SU -- "resume: schedule to worker,<br/>attach volumes" --> ST
+    ST -- "resume from<br/>durable snapshot" --> RN
+    RN -- "suspend --slo" --> SA
+    SA -- "resume from local artifacts<br/>(or unfreeze the paused process)" --> RN
+    RN -- "node/worker dies,<br/>process killed" --> CR
+    SA -- "node loss below<br/>the fidelity floor" --> CR
+    SA -- "durability events<br/>(package, auto-upload)" --> SA
+    SA -- "degrade events<br/>(OOM kill, cache GC)" --> SA
+    SA -- "detach: final escalation TTL ·<br/>node drain · reschedule ·<br/>suspend --detach" --> SU
+    CR -- "revert to tag / delete" --> SU
 ```
 
-The two escalation moves - killing the frozen process and uploading - are independent, so either may happen first; uploads are paced by a background NIC budget. Under pressure the coldest actors go first, and the memory of a killed frozen sandbox is captured to disk - or discarded where the fidelity floor permits. A resume cancels escalation at whatever state it reached: the actor restarts from the best copies available. The call always returns immediately; durability is observable as a condition.
+
+Inside `SUSPENDED ASSIGNED`, the two self-loops move each layer along its own ladder — no other actor-visible state changes:
+
+```mermaid
+flowchart LR
+    subgraph memory
+      MR[resident] --> ML[local] --> MD[durable]
+      MR -.-> MN[none]
+      ML -.-> MN
+    end
+    subgraph files
+      FR[resident] --> FL[local] --> FD[durable]
+    end
+```
+
+Solid arrows are escalation (durability events); dotted arrows are degradation, permitted only where the fidelity floor allows. The `suspend` SLO picks each layer's starting rung; local copies of already-uploaded state are cache, deleted under disk pressure without changing any guarantee.
+
+The two escalation moves - killing the paused process and uploading - are independent, so either may happen first; uploads are paced by a background NIC budget. A resume cancels escalation at whatever state it reached: the actor restarts from the best copies available. The `suspend` call always returns immediately; durability is observable as a condition.
 
 **Failures are transforms on these states, not extra edges.** A node reboot kills the paused process and erases every *resident* copy — packaged local copies survive. A node loss erases every *resident* and *local* copy — only durable copies survive. If the surviving copies still satisfy the actor's minimumResumeFidelity, the actor simply continues from a worse state: resume reassembles the survivors, no special handling needed. If a protected layer lost its last copy, the actor is **CRASHED**. Two examples, in words:
 * An actor suspended with memory and files both packaged and uploaded — process paused, local and durable copies of both layers — survives even a node loss: it comes back as "process killed, only the durable copies remain" and resumes warm from GCS. 
