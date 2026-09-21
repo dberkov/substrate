@@ -61,19 +61,32 @@ flowchart TD
 * **local** — the state has been *packaged* into a snapshot on node disk; **survives node restart**.
 * **durable** — the packaged snapshot has been uploaded; **survives node loss**. 
 
-`suspend` takes one parameter - an SLO naming the floor each layer must reach promptly, building up from the cheapest:
-* **minimal** — the sandbox is paused in place: memory and files stay resident, nothing is packaged. Cheapest suspend, fastest resume — and survives nothing by itself; the system bounds the exposure by escalating to `local` via TTL or paused-process pressure.
-* **local** — memory + files are packaged into a snapshot on node disk. **Survives node reboot**, fully warm.
-* **durable** — the packaged files (rootfs delta + volumes) are uploaded to durable storage; memory is an optional accelerator, persisted per system policy. **Survives node loss**.
+`suspend` takes two optional deadlines, one per guarantee boundary of the ladder:
+
+```
+suspend [--local-by=<duration>] [--durable-by=<duration>]
+```
+
+* `--local-by` — memory + files must be packaged (**reboot-survivable**) no later than this long after the suspend.
+* `--durable-by` — the packaged files (rootfs delta + volumes) must be uploaded (**node-loss-survivable**) no later than this; memory upload remains an optional accelerator, per system policy.
+* `0` means immediately (the work starts now at full priority; the call still returns at once — arrival of each guarantee is observable in status as `localBy`/`durableBy` and their conditions). Unset means platform-default escalation. `local-by` must be ≤ `durable-by`; if only `durable-by` is given, packaging is scheduled in time to meet it.
+
+Deadlines are ceilings on the system's laziness, never floors on its speed: node pressure, drain, or policy may move an actor up the ladder long before its deadline — the flag only bounds how late a guarantee may arrive. And a deadline governs scheduling effort, not physics: a node lost before the deadline is governed by the fidelity floor, and status shows whether the deadline was met.
+
+The old three-way choice falls out as corner cases:
+* *cheapest suspend* — no flags: pause in place, nothing packaged, escalation on platform defaults. Fastest resume; survives nothing by itself until escalation catches up.
+* *reboot-safe now* — `--local-by=0`: packaged to node disk, fully warm across a reboot.
+* *loss-safe now* — `--durable-by=0`: files uploaded immediately.
+* *newly expressible* — `--durable-by=1h`: "no urgency, but bound my node-loss exposure to an hour."
 
 **Resident vs local — packaging.** *Packaging* is the act of making state survive a restart: producing a consumable snapshot artifact on node disk. The cost of packaging differs sharply per layer:
 * **Files** are cheap to package, with a per-runtime difference. For microVMs the rootfs delta and volumes are host-file-backed block devices — the bytes are already on disk, so packaging is repositioning the files plus a host-side fsync (forcing the host's cached writes to physical disk — an operation on the host page cache that never touches the paused process, swapped out or not). For gVisor the bytes are on disk as sandbox-internal raw-page files; packaging rewrites them into consumable form using the page mapping. The mapping is written to disk at pause time (a cheap, small write the gVisor team proposed), so this rewrite manipulates local files only — it never needs the sandbox's memory either.
 * **Memory** is the expensive layer to package: every page must be materialized to be written out, and pages the kernel swapped out while the process sat paused must first be brought back in. The cost grows with time-spent-paused and peaks under RAM pressure — so escalation policy dumps memory early (by TTL, while pages are still resident) or not at all, and under heavy pressure prefers to **package the files and discard the memory** where the fidelity floor permits: the actor loses warmth, the node avoids swap-in I/O it cannot afford, and the files still reach restart-survivability.
 
 
-Orthogonal to the SLO, two background forces act on every Suspended actor, in opposite directions:
+Orthogonal to the deadlines, two background forces act on every Suspended actor, in opposite directions:
 
-**Escalation adds copies.** Within a machine, suspended actors are automatically moved along the durability ladder. The SLO defines where an actor *starts*; the system tries to do better than that when it can. An actor suspended `minimal` may have its memory and files packaged in the background, so that it would survive a node reboot; those artifacts may then be uploaded, again in the background, so that it could be resumed on another machine. Local copies linger as cache even after upload, and the paused process is kept alive as long as node pressure allows — the fastest possible resume.
+**Escalation adds copies.** Within a machine, suspended actors are automatically moved along the durability ladder. The deadlines bound how *late* each rung may arrive; the system is always free to do better. An actor suspended with no flags may have its memory and files packaged in the background, so that it would survive a node reboot; those artifacts may then be uploaded, again in the background, so that it could be resumed on another machine. Local copies linger as cache even after upload, and the paused process is kept alive as long as node pressure allows — the fastest possible resume.
 
 **Degradation removes copies.** Concurrently, circumstances on the machine may destroy some copies, making the actor's next resume more costly: heavy memory pressure may force killing a paused process; heavy disk pressure may force deleting stored artifacts. The system degrades with the **lowest impact first** — kill processes whose memory is already packaged before those whose memory is not; delete local artifacts already uploaded before those that are not — and among equal-impact candidates, the coldest actors go first. Degradation never deletes the last copy of a layer protected by minimumResumeFidelity; where a failure leaves no choice, that is a Crashed transition, not a policy decision.
 
@@ -95,7 +108,7 @@ flowchart LR
 
     SU -- "resume: schedule to worker,<br/>attach volumes" --> ST
     ST -- "resume from<br/>durable snapshot" --> RN
-    RN -- "suspend --slo" --> SA
+    RN -- "suspend [--local-by]<br/>[--durable-by]" --> SA
     SA -- "resume from local artifacts<br/>(or unfreeze the paused process)" --> RN
     RN -- "node/worker dies,<br/>process killed" --> CR
     SA -- "node loss below<br/>the fidelity floor" --> CR
@@ -120,13 +133,13 @@ flowchart LR
     end
 ```
 
-Solid arrows are escalation (durability events); dotted arrows are degradation, permitted only where the fidelity floor allows. The `suspend` SLO picks each layer's starting rung; local copies of already-uploaded state are cache, deleted under disk pressure without changing any guarantee.
+Solid arrows are escalation (durability events); dotted arrows are degradation, permitted only where the fidelity floor allows. The `suspend` deadlines bound how late each layer may reach its rung; local copies of already-uploaded state are cache, deleted under disk pressure without changing any guarantee.
 
 The two escalation moves - killing the paused process and uploading - are independent, so either may happen first; uploads are paced by a background NIC budget. A resume cancels escalation at whatever state it reached: the actor restarts from the best copies available. The `suspend` call always returns immediately; durability is observable as a condition.
 
 **Failures are transforms on these states, not extra edges.** A node reboot kills the paused process and erases every *resident* copy — packaged local copies survive. A node loss erases every *resident* and *local* copy — only durable copies survive. If the surviving copies still satisfy the actor's minimumResumeFidelity, the actor simply continues from a worse state: resume reassembles the survivors, no special handling needed. If a protected layer lost its last copy, the actor is **CRASHED**. Two examples, in words:
 * An actor suspended with memory and files both packaged and uploaded — process paused, local and durable copies of both layers — survives even a node loss: it comes back as "process killed, only the durable copies remain" and resumes warm from GCS. 
-* An actor suspended at `minimal` — paused in place, nothing packaged — survives neither a reboot nor a node loss; that exposure is exactly what the escalation TTLs exist to bound. And a crash underneath a *Running* actor leaves only dirty files, so it always moves the actor to CRASHED.
+* An actor suspended with no deadlines — paused in place, nothing packaged — survives neither a reboot nor a node loss; that exposure is exactly what the deadlines (and the platform's default escalation timers) exist to bound. And a crash underneath a *Running* actor leaves only dirty files, so it always moves the actor to CRASHED.
 
 
 ### Multi-hardware support
