@@ -176,6 +176,8 @@ Three cross-cutting rules apply regardless of runtime:
 
 CHV's position is an interface gap, not physics: it builds guest CPUID through the same KVM primitives Firecracker's templates use, and a contained contribution (carried in Substrate's own CHV builds while upstreaming) lifts it to Firecracker's tier. Until then, microVM actors get fingerprint-equality warm resume; gVisor actors get the full feature-floor behavior below from day one.
 
+> **Temporary GCP limitation.** On GCP, gVisor currently cannot trap the `CPUID` instruction issued by applications inside the sandbox, so the feature mask cannot be enforced against direct probing there. Until the GCP-side fix is deployed, gVisor actors **on GCP** are treated like CHV actors: memory snapshots warm-resume only on matching hardware (same vendor and CPU generation). Nothing about the API, templates, or snapshot stamps changes — only the scheduler's matching rule is temporarily stricter — so when the fix lands, portability widens for existing templates and snapshots with no migration.
+
 #### The `cpu` block in the ActorTemplate
 
 The CPU contract is declared in the **ActorTemplate's** `sandbox_config` section — not in the cluster-scoped `SandboxConfig` CRD. The developer owns it: the feature floor is a property of how the OCI image was compiled. The cluster CRD stays what it is — runtime binary distribution — and, critically, template fields are *versioned*: the contract can only change with a template version, which is already the boundary at which memory snapshots invalidate. (A mutable cluster object carrying stamp-affecting data would silently invalidate warm state fleet-wide on edit.)
