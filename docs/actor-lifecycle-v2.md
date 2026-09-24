@@ -67,10 +67,11 @@ flowchart TD
 suspend [--local-by=<duration>] [--durable-by=<duration>] [--detach]
 ```
 
-* `--local-by` — memory + files must be packaged (**reboot-survivable**) no later than this long after the suspend.
-* `--durable-by` — the packaged files (rootfs delta + volumes) must be uploaded (**node-loss-survivable**) no later than this; memory upload remains an optional accelerator, per system policy.
-* For the duration flags, `0` means immediately (the work starts now at full priority; the call still returns at once — arrival of each guarantee is observable in status as `localBy`/`durableBy` and their conditions). Unset means platform-default escalation. `local-by` must be ≤ `durable-by`; if only `durable-by` is given, packaging is scheduled in time to meet it.
-* `--detach` — once durability is reached, evacuate the worker entirely: release local copies and node attachments, leaving the actor Suspended and unassigned, resumable anywhere. Implies immediate durability for every layer the fidelity floor protects (see **Detach** below).
+* `--local-by` — packaging of memory + files (reboot-survivable) must start no later than this long after the suspend.
+* `--durable-by` — the packaged files (rootfs delta + volumes) must start t be be uploaded (node-loss-survivable) no later than this; memory upload remains an optional accelerator, per system policy.
+* For the duration flags, 0 means immediately (the work starts now at full priority; the call still returns at once - arrival of each guarantee is observable in status as localBy/durableBy and their conditions). Unset means platform-default escalation. local-by must be ≤ durable-by; if only durable-by is given, packaging is scheduled to start in time to meet it.
+* `--detach` —  equivalent to --durable-by=0 plus releasing all local copies and node attachments, leaving the actor Suspended and unassigned, resumable on any eligible worker. Fails if required layers protected by `minimumResumeFidelity` cannot be uploaded to durable storage.
+
 
 Deadlines are ceilings on the system's laziness, never floors on its speed: node pressure, drain, or policy may move an actor up the ladder long before its deadline — the flag only bounds how late a guarantee may arrive. And a deadline governs scheduling effort, not physics: a node lost before the deadline is governed by the fidelity floor, and status shows whether the deadline was met.
 
@@ -158,82 +159,38 @@ The two escalation moves - killing the paused process and uploading - are indepe
 
 ### Multi-hardware support
 
-#### Background: what each runtime can promise
+A memory snapshot embeds assumptions about the CPU it was captured on, and neither of our runtimes can currently mask those away: Cloud Hypervisor offers no CPU-masking interface, and on GCP gVisor cannot yet trap the `CPUID` instruction issued by sandboxed applications. The truthful promise for both is therefore the same — **a memory snapshot resumes warm only on the same hardware type it was captured on** — and this design builds on that promise alone, deferring feature-floor masking to a future extension (below).
 
-A memory snapshot embeds assumptions about the CPU it was captured on. How far it can travel is inversely proportional to **how much machine state the snapshot contains** — and the three runtimes sit at three points on that spectrum:
+#### The design: identity matching
 
-| Runtime | Snapshot contains | Restriction mechanism (today) | Portability of a memory snapshot |
-|---|---|---|---|
-| **gVisor** | application-level state only — no vCPU registers, no MSRs, no guest kernel | `dev.gvisor.internal.cpufeatures` annotation: an allowlist — only listed host features are enabled; restore validates the target offers every feature enabled at capture | **best**: any CPU, any vendor, any generation — provided it offers the listed features |
-| **Firecracker** | full machine state, normalized by CPU templates (CPUID + MSR modifiers) | static and custom CPU templates, applied at boot | **middle**: any CPU of the *same vendor* at or above the template's floor; cross-vendor restore is unsupported |
-| **Cloud Hypervisor** | full machine state, host-passthrough | none — no CPU model, mask, or template interface exists | **strictest**: same vendor and same CPU generation as capture (in practice: same machine type) |
-
-Three cross-cutting rules apply regardless of runtime:
-
-* **The first-boot rule.** The restriction must be applied at *every* sandbox start — serve runs and capture runs alike — from the very first cold boot. A sandbox that ever saw the full host CPU has already baked host-specific assumptions into memory; restricting only at snapshot time protects nothing.
-* **Enforcement has fine print.** gVisor's masking is enforced on its KVM platform but *cooperative* on systrap (a direct `CPUID` instruction still sees the host, and the vendor string is never maskable); for VMMs, hidden XSAVE-family features genuinely fault, while hidden legacy features rely on applications probing before using. Well-behaved applications are safe everywhere; a deliberately CPUID-ignoring application can poison its own snapshot — the failure lands on that actor alone, at resume.
-* **CPU is one stamp field, not the whole story.** All three runtimes also couple snapshots to their own versions (restore requires a compatible runtime version), and microVM snapshots additionally depend on the guest kernel and clock (TSC) handling — all part of the compatibility stamp from the "Snapshot layers" section.
-
-CHV's position is an interface gap, not physics: it builds guest CPUID through the same KVM primitives Firecracker's templates use, and a contained contribution (carried in Substrate's own CHV builds while upstreaming) lifts it to Firecracker's tier. Until then, microVM actors get fingerprint-equality warm resume; gVisor actors get the full feature-floor behavior below from day one.
-
-> **Temporary GCP limitation.** On GCP, gVisor currently cannot trap the `CPUID` instruction issued by applications inside the sandbox, so the feature mask cannot be enforced against direct probing there. Until the GCP-side fix is deployed, gVisor actors **on GCP** are treated like CHV actors: memory snapshots warm-resume only on matching hardware (same vendor and CPU generation). Nothing about the API, templates, or snapshot stamps changes — only the scheduler's matching rule is temporarily stricter — so when the fix lands, portability widens for existing templates and snapshots with no migration.
-
-#### The `cpu` block in the ActorTemplate
-
-The CPU contract is declared in the **ActorTemplate's** `sandbox_config` section — not in the cluster-scoped `SandboxConfig` CRD. The developer owns it: the feature floor is a property of how the OCI image was compiled. The cluster CRD stays what it is — runtime binary distribution — and, critically, template fields are *versioned*: the contract can only change with a template version, which is already the boundary at which memory snapshots invalidate. (A mutable cluster object carrying stamp-affecting data would silently invalidate warm state fleet-wide on edit.)
+Nothing is configured by the developer. Two pieces of bookkeeping — one at worker registration, one at snapshot capture — carry the same small record:
 
 ```proto
-message SandboxConfig {              // the ActorTemplate section, not the CRD
-  SandboxClass sandbox_class = 1;
-  string config_name = 2;
-
-  // NEW: the CPU every sandbox of this template presents to the workload,
-  // at every start, from the first boot. Unset fields resolve from platform
-  // defaults and are FROZEN into the template version at registration.
-  CpuSpec cpu = 3;
-}
-
-message CpuSpec {
-  CpuArchitecture architecture = 1;  // AMD64 | ARM64 — the binaries' ISA
-  CpuVendor vendor = 3;              // INTEL | AMD | UNSPECIFIED. Only meaningful for
-                                     // microVM classes (vCPU state is vendor-bound);
-                                     // gVisor ignores it. UNSPECIFIED: stamped at the
-                                     // actor's first placement.
-  bytes features = 2;                // the feature floor, as a bitset — see below
+// Advertised by every worker at registration; stamped into every snapshot.
+message HardwareIdentity {
+  string architecture = 1;   // "amd64" | "arm64" — gates what can boot at all (cold or warm)
+  string cpu_vendor   = 2;   // amd64: CPUID leaf 0 vendor string; arm64: MIDR implementer
+  string cpu_model    = 3;   // amd64: family/model/stepping from CPUID leaf 1; arm64: MIDR part.
+                             // The memory-portability key: same model ⇒ same ISA, same MSR layout
+  string machine_type = 4;   // optional, informational only: cloud instance type from the
+                             // node label node.kubernetes.io/instance-type; empty on-prem/Kind.
+                             // Never used for matching — CPUID is the truth
 }
 ```
 
-Note the architecture/vendor split: ARM-vs-x86 is *architecture* (which binaries run at all); AMD-vs-Intel is *vendor within amd64* (same binaries; matters only for microVM memory portability). There is deliberately no "CPU generation" field — generation is derived from the feature set, never authored.
+**Worker registration.** At startup, ateom reads the identity from the CPU it is running on and includes it in its worker registration. The three matching fields come from architecturally guaranteed, unprivileged interfaces — the `CPUID` instruction on amd64, `MIDR_EL1` (via `/sys` or `/proc/cpuinfo`) on arm64, `GOARCH` for the architecture — so detection is identical on GCP, AWS, Azure, on-prem, and Kind, with zero provider-specific code, no `/dev/kvm`, no `runsc` invocation. A virtualized CPU model (a dev VM booted as `-cpu Haswell`) reports as Haswell, which is correct: it is the CPU the sandbox sees, hence the CPU its snapshots depend on. `machine_type` is the one provider-flavored field; it degrades to empty where no label exists and is never consulted for placement.
 
-#### How `bytes features` is calculated
+**Snapshot capture.** Every snapshot stamps the capturing worker's `HardwareIdentity` into its metadata, alongside the other compatibility-stamp fields (image digest, sandbox runtime version, guest kernel).
 
-Users author in names or presets; the bytes are the compiled, canonical form:
+**Placement.** At resume, the scheduler compares the snapshot's stamp against candidate workers:
 
-1. The API request carries human input: `featuresPreset: intel-n2` and/or explicit `features: [avx2, aes, …]` (canonical names — the `runsc cpu-features` vocabulary).
-2. At template registration, ateapi resolves the preset, merges explicit names, and validates: names against the dictionary, dependency closure (`avx2` requires `avx`), fleet satisfiability.
-3. The result is compiled into a **bitset** and frozen into the template version. Bit positions are *mechanical*, derived from CPUID layout exactly as gVisor's [`pkg/cpuid`](https://github.com/google/gvisor/blob/master/pkg/cpuid/features_amd64.go) does it (`position = block×32 + bit`, blocks being fixed CPUID leaf/register pairs in append-only order). Positions are hardware-defined and never renumbered, so no component ever needs a distributed dictionary agreement; a set bit beyond a reader's known width means "unknown feature" → not warm-matchable, never wrong.
-
-The bitset is ~32 bytes regardless of how many features are set — O(1), not O(n). This matters because the spec is copied into every actor (a 1B-actor system) and stamped into every snapshot; and it makes the two hot-path comparisons trivial: *snapshot spec vs actor spec* is a `memcmp`, *snapshot floor vs worker capability* is `required &^ offered == 0`. Names exist only at the human boundary — display decompiles the bitset back to names.
-
-#### Presets
-
-* **Built-in presets** ship in the Substrate release: the psABI levels (`x86-64-v2`, `x86-64-v3`), `x86-64-v3-crypto` (v3 + AES-NI/PCLMULQDQ/RDRAND — the recommended default, since crypto features are not part of the psABI levels), and common cloud floors (`intel-n2`, `amd-rome`, `arm-neoverse-n1`).
-* **Operator presets** may later be added as a small cluster resource for fleet-specific floors. This is safe where storing features in a cluster object was not, because a preset is dereferenced *exactly once*, at template registration: editing or deleting it affects only future registrations, never an existing template, actor, or snapshot. Built-in names are reserved (no shadowing).
-* The template version records `{presetName, presetContentDigest, resolvedFeatures}` — provenance stays inspectable after the preset evolves.
-* An omitted `cpu.features` resolves to the platform default preset. Tooling covers the rest: `atectl cpu-features dump` (what a machine offers) and `atectl cpu-features intersect <machine-types…>` (the floor covering a fleet).
-
-#### From scheduling to the sandbox
-
-**Worker registration.** At startup, ateom probes the machine it landed on and advertises `{architecture, vendor, featureSet}` (plus a fingerprint hash) in its worker registration. The probe is flavor-appropriate: a gVisor worker reports `runsc cpu-features` output; a microVM worker reports host CPUID ∩ `KVM_GET_SUPPORTED_CPUID` — what can actually be *exposed to a guest*, not the raw host. Detection is local, automatic, and refreshed on re-registration after reboot; no human describes hardware to the system.
-
-**Placement.** At resume, the scheduler compares the snapshot's stamped `CpuSpec` against candidate workers' advertised capabilities:
-
-* architecture must match; vendor must match where the stamp carries one (microVM);
-* features: `snapshot.features &^ worker.features == 0` → **warm resume possible**;
+* `architecture`, `cpu_vendor`, and `cpu_model` all equal → **warm resume possible**;
 * otherwise the worker is still eligible for a **cold boot** from the snapshot's files (fidelity floor permitting) — a mismatch is a degradation, never an error.
 
-Warm-capable workers rank first (the assigned worker above all); the fleet-wide check stays cheap because 60k workers collapse into a handful of distinct capability fingerprints, evaluated once each.
+Warm-capable workers rank first, the assigned worker above all. The check is cheap at fleet scale: 60k workers collapse into a handful of distinct identities, evaluated once each. ateom repeats the equality check before any restore, so a stale placement becomes a clean reschedule rather than a corrupted actor.
 
-**Sandbox start.** The scheduler's choice made, ateapi passes the resolved `CpuSpec` to ateom with the placement, and ateom renders it into the runtime — the same bytes, two renderings: for gVisor, the feature list into `dev.gvisor.internal.cpufeatures`; for a microVM, the vCPU definition (CPUID mask, MSR policy, dependent XSAVE leaves — Firecracker templates today, CHV after the masking contribution). The runtime validates at restore (gVisor natively; ateom's pre-restore subset check covers the VMMs), converting any stale placement into a clean reschedule rather than a corrupted actor.
+This is exactly the "same machine type" contract Cloud Hypervisor already documents for restore, made explicit and automatic — the operator's only lever is fleet composition (more workers of a given identity ⇒ more warm capacity for snapshots taken there).
 
-The result end to end: the developer states the floor once, in the template; every sandbox of that template sees exactly that CPU on every machine; every snapshot stamps it; and hardware diversity reduces to a per-placement bitmask comparison — warm where it holds, cold-boot fallback where it doesn't.
+#### Future extension: declared feature floors
+
+The identity record is the *actual* hardware; the natural extension is a *declared* floor. A template would carry a `cpu.features` set (authored as named presets such as `x86-64-v3-crypto` or `intel-n2`, compiled at registration into a compact CPUID-derived bitset), ateom would render it into the runtime at every sandbox start (gVisor's annotation; a CPU template for Firecracker; a masking interface contributed to CHV), and the scheduler would match snapshots on *floor ⊆ worker features* instead of identity equality — warm resume across generations and, for gVisor, across vendors. The change is purely additive: new fields, a wider match rule for actors that opt in, and existing snapshots continue under identity matching. It becomes worthwhile once gVisor's mask is enforceable on GCP and/or CHV gains a masking interface; until then, identity matching delivers every warm resume the runtimes can actually honor.
