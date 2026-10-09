@@ -178,6 +178,10 @@ message ObjectSnapshot {
   // +k8s:required
   // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string snapshot_uri = 1;
+
+  string status    = 2 ; // NOT_CRESTED, CREATED
+  string timestamp = 3; // timestamp of snapshot creation?????
+
 }
 
 // LocalSnapshot records information about a node-local snapshot.
@@ -227,39 +231,44 @@ enum SnapshotStorageStatus {
 
 // SnapshotStorage records the physical storage representation of a Snapshot.
 message SnapshotStorage {
-  // durability is the durability tier of this storage entry. Only
-  // SNAPSHOT_DURABILITY_LOCAL and SNAPSHOT_DURABILITY_DURABLE are allowed.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotDurability enum
-  SnapshotDurability durability = 1;
+  // // durability is the durability tier of this storage entry. Only
+  // // SNAPSHOT_DURABILITY_LOCAL and SNAPSHOT_DURABILITY_DURABLE are allowed.
+  // //
+  // // +k8s:required
+  // // +k8s:minimum=1
+  // // +k8s:maximum=2 # keep this in sync with the SnapshotDurability enum
+  // SnapshotDurability durability = 1;
 
-  // status is the lifecycle status of this storage representation.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
-  SnapshotStorageStatus status = 2;
+  // // status is the lifecycle status of this storage representation.
+  // //
+  // // +k8s:required
+  // // +k8s:minimum=1
+  // // +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
+  // SnapshotStorageStatus status = 2;
 
   // fidelity is what the snapshot holds.
   //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 3;
+  SnapshotFidelity durable_fidelity = 3;
 
-  // Exactly one of local or object must be set.
-  //
-  // local snapshot is stored on the node where the actor was suspended.
-  //
   // +k8s:optional
-  // +k8s:unionMember
-  LocalSnapshot local = 4;
+  // node VM for now, for mega_atelet + RESIDENT it will be atelet????
+  string localality = 6;
+
+  // // Exactly one of local or object must be set.
+  // //
+  // // local snapshot is stored on the node where the actor was suspended.
+  // //
+  // // +k8s:optional
+  // // +k8s:unionMember
+  // LocalSnapshot local = 4;
 
   // object snapshot is stored in object storage.
   //
-  // +k8s:optional
+  /////// +k8s:optional
+  // +k8s:required
   // +k8s:unionMember
   ObjectSnapshot object = 5;
 }
@@ -290,11 +299,14 @@ message Snapshot {
   // storage lists the storage representations of this snapshot by durability.
   // Only SNAPSHOT_DURABILITY_LOCAL and SNAPSHOT_DURABILITY_DURABLE are allowed.
   //
-  // +k8s:required
+  // ----    // +k8s:required
+  // +k8s:optional
   // +k8s:maxItems=2
   // +k8s:listType=map
   // +k8s:listMapKey=durability
-  repeated SnapshotStorage storage = 4;
+  // repeated SnapshotStorage storage = 4;
+  SnapshotStorage duable_snapshot = 4;
+
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -774,15 +786,15 @@ message ActorJWTSource {
 
 enum ActorState {
   ACTOR_STATE_UNSPECIFIED = 0;
-  ACTOR_STATE_RESUMING = 1;
-  ACTOR_STATE_RUNNING = 2;
-  ACTOR_STATE_SUSPENDING = 3;
-  ACTOR_STATE_SUSPENDED = 4;
-  ACTOR_STATE_PAUSING = 5;
-  ACTOR_STATE_PAUSED = 6;
-  ACTOR_STATE_CRASHED = 7;
-  ACTOR_STATE_DELETING = 8;
-  ACTOR_STATE_REVERTING = 9;
+  ACTOR_STATE_RESUMING    = 1;
+  ACTOR_STATE_RUNNING     = 2;
+  ACTOR_STATE_SUSPENDING  = 3;
+  ACTOR_STATE_SUSPENDED   = 4;
+  ACTOR_STATE_PAUSING     = 5;
+  ACTOR_STATE_PAUSED      = 6;
+  ACTOR_STATE_CRASHED     = 7;
+  ACTOR_STATE_DELETING    = 8;
+  ACTOR_STATE_REVERTING   = 9;
   // Keep this in sync with ActorStatus.state's maximum.
 }
 
@@ -1012,8 +1024,8 @@ message ObjectRef {
 // across classes.
 enum SandboxClass {
   SANDBOX_CLASS_UNSPECIFIED = 0;
-  SANDBOX_CLASS_GVISOR = 1;
-  SANDBOX_CLASS_MICROVM = 2;
+  SANDBOX_CLASS_GVISOR      = 1;
+  SANDBOX_CLASS_MICROVM     = 2;
   // Keep this in sync with SandboxConfig.sandbox_class's maximum.
 }
 
@@ -1444,9 +1456,9 @@ message ActorMetadataItem {
 // ActorMetadataField selects one identity field of the actor.
 enum ActorMetadataField {
   ACTOR_METADATA_FIELD_UNSPECIFIED = 0;
-  ACTOR_METADATA_FIELD_NAME = 1;
-  ACTOR_METADATA_FIELD_ATESPACE = 2;
-  ACTOR_METADATA_FIELD_UID = 3;
+  ACTOR_METADATA_FIELD_NAME        = 1;
+  ACTOR_METADATA_FIELD_ATESPACE    = 2;
+  ACTOR_METADATA_FIELD_UID         = 3;
   // Keep this in sync with ActorMetadataItem.field's maximum.
 }
 
@@ -1873,8 +1885,8 @@ message ListTagsRequest {
 }
 
 message ListTagsResponse {
-  repeated Tag tags = 1;
-  string next_page_token = 2;
+  repeated Tag tags            = 1;
+  string       next_page_token = 2;
 }
 
 // Request to tag the external snapshot a suspended Actor holds.
