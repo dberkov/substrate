@@ -27,7 +27,7 @@ func TestRangedReaderCloseStopsRequests(t *testing.T) {
 	defer head.Close()
 	defer body.Close()
 	fetchContext := make(chan context.Context, 1)
-	r := newRangedReader(t.Context(), downloadChunkSize+1, head, func(ctx context.Context, _ int, _, _ int64, _ []byte) error {
+	r := newRangedReader(t.Context(), downloadChunkSize+1, head, func(ctx context.Context, _, _ int64, _ []byte) error {
 		fetchContext <- ctx
 		<-ctx.Done()
 		return ctx.Err()

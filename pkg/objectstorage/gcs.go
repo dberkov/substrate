@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -34,15 +35,18 @@ type gcsClient struct {
 	// A pooled client that authenticates differently from the one that opened
 	// an object fails partway through reading it.
 	opts []option.ClientOption
-	// pool holds extra clients so concurrent parts get their own connections;
-	// built on first use by uploadClient.
+	// pool holds extra clients so concurrent transfers get their own connections;
+	// built on first use by poolClient. next hands them out round-robin across every
+	// transfer in the process, not just the parts of one object, so a worker moving
+	// many small snapshots at once spreads out as well as one large object does.
 	poolOnce sync.Once
 	pool     []*storage.Client
+	next     atomic.Uint64
 }
 
 // NewGCSClient returns a GCS-backed ObjectStorage. It builds its own
 // storage.Client from opts (and more from the same opts for the part-upload
-// pool, see uploadClient) rather than accepting one, because it installs a
+// pool, see poolClient) rather than accepting one, because it installs a
 // RetryAlways policy (see setRetry) that is only safe for this package's own
 // operations and must not leak onto a client shared with other code.
 func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStorage, error) {
@@ -103,9 +107,10 @@ func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader
 	return g.putComposite(ctx, bucket, object, bytes.NewReader(head[:n]), reader)
 }
 
-// putSingle writes the whole body in one resumable request.
+// putSingle writes the whole body in one resumable request, over a pooled client so
+// concurrent single-request uploads do not all share one connection.
 func (g *gcsClient) putSingle(ctx context.Context, bucket, object string, reader io.Reader) error {
-	wc := g.client.Bucket(bucket).Object(object).NewWriter(ctx)
+	wc := g.poolClient(ctx).Bucket(bucket).Object(object).NewWriter(ctx)
 	wc.ChunkSize = uploadChunkSize
 	// io.Copy reports local read errors; wc.Close() reports the actual
 	// GCS upload (auth, permissions, transient). Join both so the caller

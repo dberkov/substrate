@@ -27,22 +27,27 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// uploadPoolSize is how many storage.Clients the parallel part upload spreads its
-// parts over. One client keeps a single HTTP/2 connection per host and multiplexes
-// every part onto it, so parts that should be independent share one TCP stream:
-// measured on a GKE worker node at 8 streams, 334 MB/s shared against 518 MB/s with a
-// connection each.
-const uploadPoolSize = 8
+// poolSize is how many storage.Clients transfers are spread over. One client keeps a
+// single HTTP/2 connection per host and multiplexes every request onto it, so
+// transfers that should be independent share one TCP stream: measured on a GKE worker
+// node at 8 streams, 334 MB/s shared against 518 MB/s with a connection each.
+//
+// A worker suspends and resumes many actors at once, so this is sized for the
+// transfers in flight across the process rather than the parts of one object: at ten
+// switches a second, each an upload plus a few download ranges lasting under a
+// second, a few dozen streams are open at a time. More clients than open streams buy
+// nothing, and each holds its own transport.
+const poolSize = 32
 
-// uploadClient returns the client part i should use, or the default client if the pool
-// could not be built (a pool failure costs throughput, not correctness).
-func (g *gcsClient) uploadClient(ctx context.Context, i int) *storage.Client {
+// poolClient returns the next client in round-robin order, or the default client if
+// the pool could not be built (a pool failure costs throughput, not correctness).
+func (g *gcsClient) poolClient(ctx context.Context) *storage.Client {
 	g.poolOnce.Do(func() {
-		for range uploadPoolSize {
+		for range poolSize {
 			// The clients outlive this call, so they must not hold its cancellation.
 			c, err := storage.NewClient(context.WithoutCancel(ctx), g.opts...)
 			if err != nil {
-				slog.WarnContext(ctx, "Falling back to one client for part uploads", slog.Any("err", err))
+				slog.WarnContext(ctx, "Falling back to one client for transfers", slog.Any("err", err))
 				return
 			}
 			setRetry(c)
@@ -52,7 +57,7 @@ func (g *gcsClient) uploadClient(ctx context.Context, i int) *storage.Client {
 	if len(g.pool) == 0 {
 		return g.client
 	}
-	return g.pool[i%len(g.pool)]
+	return g.pool[g.next.Add(1)%uint64(len(g.pool))]
 }
 
 // One stream to GCS tops out near 100 MiB/s however it is chunked; several do not
@@ -115,7 +120,7 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 		if n > 0 {
 			part := bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 			parts = append(parts, part)
-			upPart := g.uploadClient(ctx, i).Bucket(bucket).Object(part.ObjectName())
+			upPart := g.poolClient(ctx).Bucket(bucket).Object(part.ObjectName())
 			data := buf[:n]
 			g2.Go(func() error {
 				defer func() { free <- buf }()

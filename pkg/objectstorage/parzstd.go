@@ -38,6 +38,12 @@ const (
 	// parZstdQueue is how many chunks may be outstanding per worker, so the producer
 	// can run ahead while workers compress.
 	parZstdQueue = 2
+	// parZstdMaxWorkers caps the pool regardless of core count. Each worker holds an
+	// encoder and parZstdQueue chunk buffers, so the pool costs workers * 16 MiB up
+	// front: unbounded, a 130-core host spends 2 GiB per upload. One worker at the
+	// fastest level compresses several hundred MB/s of memory image, so 16 outrun
+	// what the upload behind them can carry while costing 256 MiB.
+	parZstdMaxWorkers = 16
 )
 
 // parZstd is an io.WriteCloser that compresses what it is given as parallel zstd
@@ -60,10 +66,12 @@ type parZstdJob struct {
 	out chan []byte
 }
 
-// newParZstd starts the worker pool, capped at GOMAXPROCS (workers <= 0 asks for it).
+// newParZstd starts the worker pool, capped at the lesser of GOMAXPROCS and
+// parZstdMaxWorkers (workers <= 0 asks for that cap).
 func newParZstd(dst io.Writer, workers int) *parZstd {
-	if workers <= 0 || workers > runtime.GOMAXPROCS(0) {
-		workers = runtime.GOMAXPROCS(0)
+	limit := min(runtime.GOMAXPROCS(0), parZstdMaxWorkers)
+	if workers <= 0 || workers > limit {
+		workers = limit
 	}
 	p := &parZstd{
 		dst:     dst,

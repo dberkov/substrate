@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 )
 
@@ -46,20 +47,46 @@ func TestPooledClientsAreBuiltLikeTheClientTheyStandIn(t *testing.T) {
 	}
 	defer g.client.Close()
 
-	pooled := g.uploadClient(ctx, 0)
+	pooled := g.poolClient(ctx)
 	if pooled == nil {
-		t.Fatal("uploadClient returned nil")
+		t.Fatal("poolClient returned nil")
 	}
 	if pooled == g.client {
-		t.Fatal("uploadClient fell back to the wrapped client: the pool was not given the client's " +
+		t.Fatal("poolClient fell back to the wrapped client: the pool was not given the client's " +
 			"options, so ranges past the first would go out authenticated")
 	}
-	if len(g.pool) != uploadPoolSize {
-		t.Errorf("pool holds %d clients, want %d", len(g.pool), uploadPoolSize)
+	if len(g.pool) != poolSize {
+		t.Errorf("pool holds %d clients, want %d", len(g.pool), poolSize)
 	}
-	for i := range uploadPoolSize {
-		if c := g.uploadClient(ctx, i); c == nil || c == g.client {
-			t.Errorf("uploadClient(%d) did not return a pooled connection", i)
+}
+
+// TestPoolClientRotatesAcrossCalls checks that consecutive calls walk the whole pool,
+// so concurrent transfers of many small objects spread over every connection rather
+// than piling onto the first few.
+func TestPoolClientRotatesAcrossCalls(t *testing.T) {
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/credentials.json")
+	t.Setenv("GCE_METADATA_HOST", "127.0.0.1:1")
+
+	ctx := context.Background()
+	store, err := NewGCSClient(ctx, option.WithoutAuthentication())
+	if err != nil {
+		t.Fatalf("an anonymous client must build without credentials: %v", err)
+	}
+	g := store.(*gcsClient)
+	defer g.client.Close()
+
+	seen := map[*storage.Client]bool{}
+	for range poolSize {
+		c := g.poolClient(ctx)
+		if c == nil || c == g.client {
+			t.Fatal("poolClient did not return a pooled connection")
 		}
+		seen[c] = true
+	}
+	if len(seen) != poolSize {
+		t.Errorf("%d calls reached %d distinct clients, want %d", poolSize, len(seen), poolSize)
+	}
+	if c := g.poolClient(ctx); !seen[c] {
+		t.Error("the call after a full rotation did not wrap around to a pooled client")
 	}
 }
