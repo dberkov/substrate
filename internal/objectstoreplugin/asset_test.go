@@ -493,3 +493,44 @@ func TestNewAssetPluginRejectsUnknownScheme(t *testing.T) {
 		}
 	}
 }
+
+// refusingObjects is a backend whose bucket rejects the plugin's token, as a
+// legacy-ACL bucket rejects a Workload Identity Federation token.
+type refusingObjects struct{}
+
+func (refusingObjects) GetObject(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, ublaRefusal()
+}
+
+func (refusingObjects) PutObject(context.Context, string, string, io.Reader) error { return nil }
+
+// TestFetchAssetBucketRefusesToken pins the status atelet keys its anonymous
+// fallback on: a bucket the plugin's credentials cannot read is a request the
+// plugin cannot serve, not an internal failure, and the caller's file is left
+// as it was.
+func TestFetchAssetBucketRefusesToken(t *testing.T) {
+	root, staging := t.TempDir(), t.TempDir()
+	plugin, err := NewAssetPlugin(refusingObjects{}, "gs", root, staging, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(root, "asset")
+	if err := os.WriteFile(dst, []byte("untouched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = plugin.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+		AssetUri:  "gs://gvisor/releases/nightly/x86_64/gvisor.tar.zstd",
+		Sha256:    strings.Repeat("a", 64),
+		WritePath: dst,
+		MaxBytes:  1 << 30,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("FetchAsset = %v (code %s), want %s", err, status.Code(err), codes.InvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "uniform bucket-level access") {
+		t.Errorf("error does not say why the bucket refused: %v", err)
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "untouched" {
+		t.Errorf("write path changed to %q", got)
+	}
+}
