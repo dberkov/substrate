@@ -892,3 +892,49 @@ func TestWorkerSandboxSyncerRunIndexesExistingPods(t *testing.T) {
 		t.Error("a pod whose pool does not exist was indexed")
 	}
 }
+
+// TestWorkerSandboxSyncerPrunesAfterInitialPass pins when the prewarmer is
+// first asked to prune its pins after a restart: once every pod present at
+// the first cache sync has been processed once, so the index holds the
+// defaults of the workers already on the node and their pins are kept;
+// with no such pod, as soon as the caches synced.
+func TestWorkerSandboxSyncerPrunesAfterInitialPass(t *testing.T) {
+	runSyncer := func(t *testing.T, s *workerSandboxSyncer) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			s.run(ctx, func() bool { return true })
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-stopped
+		})
+	}
+
+	t.Run("no pods: prunes once the caches synced", func(t *testing.T) {
+		s := newTestSyncer(t)
+		rec := &recordingPrewarm{}
+		s.prewarm = rec
+		runSyncer(t, s)
+		waitFor(t, "the first prune", func() bool { return rec.pruneCount() == 1 })
+	})
+
+	t.Run("prunes once every initial pod was processed", func(t *testing.T) {
+		// pod-live is planned, which asks for a prune of its own; pod-orphan
+		// fails and is retried in the background. The pass is complete once
+		// both were processed once: one more prune, and no more after.
+		s := newTestSyncer(t, workerPod("pod-live", "pool"), workerPod("pod-orphan", "missing-pool"), resolvedPool("pool", "gvisor-release"), multiVersionConfig())
+		rec := &recordingPrewarm{}
+		s.prewarm = rec
+		s.queue.Add("pod-live")
+		s.queue.Add("pod-orphan")
+		runSyncer(t, s)
+		waitFor(t, "the plan's prune and the pass's prune", func() bool { return rec.pruneCount() == 2 })
+		waitFor(t, "pod-orphan to be retried", func() bool { return s.queue.NumRequeues("pod-orphan") > 0 })
+		if got := rec.pruneCount(); got != 2 {
+			t.Errorf("prune asked %d times, want 2: a retried pod must not prune again", got)
+		}
+	})
+}

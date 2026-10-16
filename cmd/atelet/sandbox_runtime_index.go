@@ -270,6 +270,23 @@ func (x *runtimeIndex) lookup(hash string) (*indexedRuntime, bool) {
 	return rt, ok
 }
 
+// defaultHashes returns the runtimes some worker on this node currently
+// advertises as the default of one of its classes: the ones to keep
+// prewarmed and pinned in the cache.
+func (x *runtimeIndex) defaultHashes() map[string]bool {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	defaults := map[string]bool{}
+	for _, wr := range x.workers {
+		for _, cr := range wr.classes {
+			if cr.defaultHash != "" {
+				defaults[cr.defaultHash] = true
+			}
+		}
+	}
+	return defaults
+}
+
 // worker returns what the worker pod currently advertises.
 func (x *runtimeIndex) worker(podUID string) (*workerRuntime, bool) {
 	x.mu.RLock()

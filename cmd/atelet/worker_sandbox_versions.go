@@ -486,12 +486,13 @@ func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 //   - plan: resolve the pool's config and its versions for this node
 //   - hash: hash each version's runtime, and make each resolvable by its
 //     hash before the file can let the worker register it
-//   - prewarm: have the default runtime's assets fetched, off this
-//     goroutine, so the probe below is its head start and the file never
-//     waits on a download
+//   - prewarm: have the default runtime's assets fetched and pinned, off
+//     this goroutine, so the probe below is its head start and the file
+//     never waits on a download
 //   - build: probe what a snapshot taken on each runtime must find again
 //   - write: replace the file if its content changed, then record what
-//     the worker now advertises in the index
+//     the worker now advertises in the index, and have pins of runtimes
+//     no longer any worker's default pruned
 //
 // A file missing restorable runtimes for a transient reason is written all
 // the same, and the errIncomplete from build is returned so finish retries.
@@ -516,7 +517,7 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	if s.prewarm != nil {
 		for _, v := range hashed {
 			if v.isDefault {
-				s.prewarm(v.hash)
+				s.prewarm.enqueue(v.hash)
 			}
 		}
 	}
@@ -533,6 +534,10 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 	// today; a pool that runs several will yield one plan per class here.
 	if err := s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)}); err != nil {
 		return err
+	}
+	if s.prewarm != nil {
+		// The pod's default may have changed; a pin for the old one goes.
+		s.prewarm.prune()
 	}
 	return buildErr
 }
