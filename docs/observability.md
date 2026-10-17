@@ -308,7 +308,7 @@ For `atenet.router.route.duration`:
 For `ate.imagecache.requests`:
 * `ate.imagecache.outcome` is `hit` when the node holds a complete image record — every layer directory the record names is present — and `miss` when the lookup must pull. A failed lookup is neither: `error` is a failed lookup whatever the cause, and `cancelled` or `timeout` is the caller giving up, as on `ate.router.outcome`. So the hit ratio is `hit / (hit + miss)`, with failures and abandoned lookups out of the denominator.
 
-For the `ate.sandboxassetcache.*` instruments:
+For the `ate.sandboxassetcache.*` instruments (see the [Sandbox Asset Cache](sandbox-asset-cache.md) page):
 * The cache evicts only what nothing links: an actor's staged assets and the pins of each worker's default runtime are hard links into the cache, and an entry with a link stays whatever the pressure. `ate.sandboxassetcache.gc.outcome` is `shortfall` when a pass could not reach the budget for that reason; the size then measures what the actors and the defaults on the node need, not waste. `skipped` means atelet could not read the cache directory and did nothing.
 * `error.type` is present only on the `error` outcome, and carries the registry's own HTTP status for its rejection, from a fixed set: `401`, `403`, `404`, `429`, `500`, `502`, `503`, `504`. The set is an allow-list because the registry client reports whatever the remote returned. Each other status, and each failure that carries no status, reports `_OTHER`.
 
